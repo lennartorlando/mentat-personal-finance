@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+
+data/
+config/aqbanking.local/
+config/aqbanking.home.local/
+config/*.local.json
+config/fints_state.local/
+
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+.DS_Store
+
