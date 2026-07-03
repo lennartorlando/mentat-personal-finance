@@ -16,6 +16,16 @@ class SecurityTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_fints_pin("pässword")
 
+    def test_validate_fints_pin_rejects_empty_value(self):
+        with self.assertRaises(ValueError):
+            validate_fints_pin("")
+
+    def test_validate_fints_pin_rejects_control_characters(self):
+        for pin in ("abc\n123", "abc\r123", "abc\t123", "abc\x00123"):
+            with self.subTest(pin=repr(pin)):
+                with self.assertRaises(ValueError):
+                    validate_fints_pin(pin)
+
 
 class BalanceParserTests(unittest.TestCase):
     def test_parse_balance_output(self):

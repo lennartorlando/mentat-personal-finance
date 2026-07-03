@@ -9,6 +9,8 @@
 - Temporary PIN file handling
 - Normalized balance CSV exports
 - Local runtime directories ignored by Git
+- Runtime path boundaries and private local file permissions
+- Spreadsheet-safe CSV writing
 - Documentation for safe operation
 
 ## Personal Overlay
@@ -31,8 +33,10 @@ Keep these out of the open-source package:
 ## Security Rules
 
 - Never log or echo PINs.
-- Validate PIN length and ASCII compatibility before AqBanking sees it.
+- Validate PIN length, ASCII compatibility, non-emptiness, and control-character safety before AqBanking sees it.
 - Use temporary PIN files only, with `0600` permissions, and delete them immediately.
+- Fail before prompting for a PIN when the local AqBanking user config cannot be represented safely in a temporary PIN file.
 - Treat local account config as sensitive metadata.
+- Keep generated context and CSV paths inside the runtime data boundary unless the user explicitly opts out.
+- Neutralize spreadsheet formula prefixes in CSV exports.
 - Keep cloud sync explicit and allow-listed.
-

@@ -34,6 +34,10 @@ python3 -m personal_finance_agent.cli aq get-accounts --root . --user USER_ID --
 python3 -m personal_finance_agent.cli aq balances --root . --safe-pin-user USER_ID
 ```
 
+`--safe-pin-user` uses a temporary AqBanking PIN file and validates the PIN before AqBanking sees it. Some AqBanking PIN-file keys do not support whitespace in the FinTS login value; in that case the wrapper fails before asking for a PIN instead of creating a broken PIN file. Run without `--safe-pin-user` if you intentionally want AqBanking to prompt directly.
+
+By default, balance context and CSV files are written under the runtime `data/` directory. Use `--allow-outside-runtime` only when you intentionally want a context or CSV path outside that local boundary. Non-standard AqBanking installs can be selected with `aq --aqbanking-cli PATH` and `aq --aqhbci-tool4 PATH`.
+
 For local development from this checkout:
 
 ```bash
@@ -63,6 +67,8 @@ Generated data and runtime configuration are local-only:
 
 PINs are never stored by the tool. The AqBanking wrapper can create a temporary PIN file with restrictive permissions and delete it immediately after use.
 
+Runtime directories are created with private POSIX permissions where supported. CSV exports are spreadsheet-safe by default: cells that could be interpreted as spreadsheet formulas are neutralized during CSV writing.
+
 ## Roadmap
 
 - Account discovery and balance export through AqBanking.
@@ -71,4 +77,3 @@ PINs are never stored by the tool. The AqBanking wrapper can create a temporary 
 - A stable local data model.
 - Agent-friendly command outputs.
 - Optional dashboard/reporting layer.
-

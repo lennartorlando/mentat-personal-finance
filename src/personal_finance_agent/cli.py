@@ -8,7 +8,17 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .aqbanking import AqContext, append_csv, base, parse_balance_output, run_capture, run_interactive, run_with_optional_pinfile
+from .aqbanking import (
+    AqContext,
+    append_csv,
+    base,
+    ensure_private_file,
+    parse_balance_output,
+    resolve_runtime_path,
+    run_capture,
+    run_interactive,
+    run_with_optional_pinfile,
+)
 from .security import validate_fints_pin
 
 
@@ -32,17 +42,17 @@ def cmd_validate_pin(_: argparse.Namespace) -> int:
 
 def cmd_aq_versions(args: argparse.Namespace) -> int:
     ctx = context(args)
-    return run_interactive(ctx, base(ctx, "aqbanking-cli") + ["versions"])
+    return run_interactive(ctx, base(ctx, "aqbanking-cli", args.aqbanking_cli) + ["versions"])
 
 
 def cmd_aq_list_users(args: argparse.Namespace) -> int:
     ctx = context(args)
-    return run_interactive(ctx, base(ctx, "aqhbci-tool4") + ["listusers"])
+    return run_interactive(ctx, base(ctx, "aqhbci-tool4", args.aqhbci_tool4) + ["listusers"])
 
 
 def cmd_aq_add_pintan_user(args: argparse.Namespace) -> int:
     ctx = context(args)
-    command = base(ctx, "aqhbci-tool4") + [
+    command = base(ctx, "aqhbci-tool4", args.aqhbci_tool4) + [
         "adduser",
         "--tokentype=pintan",
         f"--bank={args.bank_code}",
@@ -58,7 +68,7 @@ def cmd_aq_add_pintan_user(args: argparse.Namespace) -> int:
 
 def cmd_aq_get_accounts(args: argparse.Namespace) -> int:
     ctx = context(args)
-    command = base(ctx, "aqhbci-tool4") + ["getaccounts"]
+    command = base(ctx, "aqhbci-tool4", args.aqhbci_tool4) + ["getaccounts"]
     if args.user:
         command.append(f"--user={args.user}")
     return run_with_optional_pinfile(ctx, command, args.safe_pin_user)
@@ -66,15 +76,17 @@ def cmd_aq_get_accounts(args: argparse.Namespace) -> int:
 
 def cmd_aq_list_accounts(args: argparse.Namespace) -> int:
     ctx = context(args)
-    return run_interactive(ctx, base(ctx, "aqbanking-cli") + ["listaccs"])
+    return run_interactive(ctx, base(ctx, "aqbanking-cli", args.aqbanking_cli) + ["listaccs"])
 
 
 def cmd_aq_balances(args: argparse.Namespace) -> int:
     ctx = context(args)
-    request_command = base(ctx, "aqbanking-cli") + [
+    context_file = resolve_runtime_path(ctx, args.context, ctx.context_file, args.allow_outside_runtime, "AqBanking context")
+    csv_path = resolve_runtime_path(ctx, args.csv, ctx.data_dir / "balances.csv", args.allow_outside_runtime, "CSV export")
+    request_command = base(ctx, "aqbanking-cli", args.aqbanking_cli) + [
         "request",
         "--balance",
-        f"--ctxfile={args.context}",
+        f"--ctxfile={context_file}",
         "--ignoreUnsupported",
     ]
     if args.iban:
@@ -84,12 +96,13 @@ def cmd_aq_balances(args: argparse.Namespace) -> int:
         return code
 
     template = "$(dateAsString)\t$(valueAsString)\t$(iban)\t$(bankcode)\t$(accountnumber)"
+    ensure_private_file(context_file)
     output = run_capture(
         ctx,
-        base(ctx, "aqbanking-cli") + ["listbal", f"--ctxfile={args.context}", f"--template={template}"],
+        base(ctx, "aqbanking-cli", args.aqbanking_cli) + ["listbal", f"--ctxfile={context_file}", f"--template={template}"],
     )
     rows = parse_balance_output(output, args.date)
-    append_csv(Path(args.csv), rows)
+    append_csv(csv_path, rows)
     return 0
 
 
@@ -108,6 +121,8 @@ def build_parser() -> argparse.ArgumentParser:
     validate_pin.set_defaults(func=cmd_validate_pin)
 
     aq = subparsers.add_parser("aq", help="AqBanking workflows.")
+    aq.add_argument("--aqbanking-cli", help="Explicit aqbanking-cli executable path.")
+    aq.add_argument("--aqhbci-tool4", help="Explicit aqhbci-tool4 executable path.")
     aq_sub = aq.add_subparsers(dest="aq_command", required=True)
 
     aq_versions = aq_sub.add_parser("versions")
@@ -139,11 +154,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     aq_balances = aq_sub.add_parser("balances")
     add_root(aq_balances)
-    aq_balances.add_argument("--context", type=Path, default=Path("data") / "aqbanking.ctx")
-    aq_balances.add_argument("--csv", default=str(Path("data") / "balances.csv"))
+    aq_balances.add_argument("--context", type=Path)
+    aq_balances.add_argument("--csv", type=Path)
     aq_balances.add_argument("--date", default=dt.date.today().isoformat())
     aq_balances.add_argument("--iban")
     aq_balances.add_argument("--safe-pin-user")
+    aq_balances.add_argument("--allow-outside-runtime", action="store_true")
     aq_balances.set_defaults(func=cmd_aq_balances)
 
     return parser
