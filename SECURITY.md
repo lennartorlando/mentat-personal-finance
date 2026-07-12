@@ -1,6 +1,6 @@
 # Security Policy
 
-Personal Finance Agent touches sensitive financial workflows. Treat every local runtime file as private.
+Mentat touches sensitive financial workflows. Treat every local runtime file as private.
 
 ## Do Not Commit
 

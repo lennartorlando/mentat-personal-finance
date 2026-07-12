@@ -1,10 +1,12 @@
-# Personal Finance Agent
+# Mentat
 
-Personal Finance Agent is a local-first toolkit for building your own personal finance single source of interaction.
+Mentat is a local-first toolkit for building your own personal finance single source of interaction.
 
 The goal is simple: connect to your own banks and finance exports locally, normalize the data, and make it available to scripts, spreadsheets, dashboards, and agents without giving a cloud service your banking credentials.
 
 The first focus is Europe, especially Germany and Austria, where FinTS/HBCI and bank exports are common building blocks.
+
+The Python package and CLI module currently retain the `personal_finance_agent` name during the pre-alpha phase.
 
 ## Status
 

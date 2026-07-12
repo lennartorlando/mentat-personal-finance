@@ -1,6 +1,6 @@
 # Contributing
 
-This project is early. The best contributions are small, specific, and grounded in real local finance workflows.
+Mentat is early. The best contributions are small, specific, and grounded in real local finance workflows.
 
 Good first areas:
 
@@ -11,4 +11,3 @@ Good first areas:
 - Tests for parsers and normalization
 
 Please avoid adding hosted services, telemetry, or credential storage without a clear discussion first.
-

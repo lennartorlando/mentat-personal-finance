@@ -1,6 +1,6 @@
 # Open Source Direction
 
-`finlocal` should become a local-first CLI for people who want bank data exports without handing credentials to a cloud service.
+Mentat should become a local-first CLI for people who want bank data exports without handing credentials to a cloud service.
 
 ## Publishable Core
 

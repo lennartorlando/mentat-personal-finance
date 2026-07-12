@@ -11,7 +11,7 @@ date: 2026-07-02
 
 ## Goal Capsule
 
-**Objective:** Package Personal Finance Agent into a sequence of product iterations that first solves private personal use with European banks, then expands into dashboards, tagging, reporting, and agent-native interaction.
+**Objective:** Package Mentat into a sequence of product iterations that first solves private personal use with European banks, then expands into dashboards, tagging, reporting, and agent-native interaction.
 
 **Product authority:** The public repo is local-first and Europe-first. Personal bank/runtime details stay private; public work should use reusable DACH examples rather than personal account identifiers.
 
@@ -31,7 +31,7 @@ The first iterations should optimize for one user getting reliable value locally
 
 People in Europe often have finances spread across FinTS-capable banks, app-first banks, brokers, crypto exchanges, spreadsheets, and PDFs. Existing apps either cost money, keep data in a vendor cloud, lack agent-friendly interfaces, or do not fit local privacy preferences.
 
-Personal Finance Agent should become a local single source of interaction: a tool humans can use directly and agents can operate safely through the same commands, manifests, and audit trail.
+Mentat should become a local single source of interaction: a tool humans can use directly and agents can operate safely through the same commands, manifests, and audit trail.
 
 ---
 
@@ -392,4 +392,3 @@ Deliver U7 and U8. This makes the same system usable by humans, agents, and visu
 - The plan preserves personal-first prioritization without exposing personal data.
 - Each implementation unit has a clear dependency order, file scope, and test scenarios.
 - The first implementation target is U1: harden the personal AqBanking/FinTS bank workflow.
-

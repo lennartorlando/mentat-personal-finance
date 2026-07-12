@@ -32,7 +32,7 @@ The current pre-alpha CLI already follows a good local-first direction: AqBankin
 
 ### Problem Frame
 
-Personal Finance Agent is intended to touch sensitive banking data while remaining usable by a human and by an agent. That means paths, subprocesses, temporary secrets, and exported CSV content need defensive defaults. A user should not need to remember every unsafe combination of flags to avoid leaking financial data or handing a PIN to the wrong binary.
+Mentat is intended to touch sensitive banking data while remaining usable by a human and by an agent. That means paths, subprocesses, temporary secrets, and exported CSV content need defensive defaults. A user should not need to remember every unsafe combination of flags to avoid leaking financial data or handing a PIN to the wrong binary.
 
 ### Requirements
 
