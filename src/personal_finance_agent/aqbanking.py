@@ -78,9 +78,10 @@ def ensure_private_file(path: Path) -> None:
         chmod_private(path, PRIVATE_FILE_MODE)
 
 
-def is_world_writable(path: Path) -> bool:
+def is_unsafe_world_writable_dir(path: Path) -> bool:
     try:
-        return bool(path.stat().st_mode & stat.S_IWOTH)
+        mode = path.stat().st_mode
+        return bool(mode & stat.S_IWOTH) and not bool(mode & stat.S_ISVTX)
     except OSError:
         return False
 
@@ -88,7 +89,7 @@ def is_world_writable(path: Path) -> bool:
 def has_world_writable_parent(path: Path) -> bool:
     resolved = path.resolve()
     for parent in (resolved.parent, *resolved.parents):
-        if is_world_writable(parent):
+        if is_unsafe_world_writable_dir(parent):
             return True
     return False
 

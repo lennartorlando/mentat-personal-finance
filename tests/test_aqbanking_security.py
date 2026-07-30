@@ -75,6 +75,33 @@ class AqToolResolutionTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 resolve_aq_tool(tool)
 
+    @unittest.skipUnless(os.name == "posix", "POSIX sticky-bit semantics only")
+    def test_tool_under_sticky_world_writable_parent_is_allowed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sticky_dir = Path(tmp) / "sticky"
+            sticky_dir.mkdir(mode=0o1777)
+            sticky_dir.chmod(0o1777)
+            private_dir = sticky_dir / "private"
+            private_dir.mkdir(mode=0o700)
+            tool = private_dir / "aqbanking-cli"
+            tool.write_text("#!/bin/sh\n", encoding="utf-8")
+            tool.chmod(0o700)
+
+            self.assertEqual(resolve_aq_tool(tool), tool.resolve())
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permission semantics only")
+    def test_tool_under_unprotected_world_writable_parent_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            unsafe_dir = Path(tmp) / "unsafe"
+            unsafe_dir.mkdir(mode=0o777)
+            unsafe_dir.chmod(0o777)
+            tool = unsafe_dir / "aqbanking-cli"
+            tool.write_text("#!/bin/sh\n", encoding="utf-8")
+            tool.chmod(0o700)
+
+            with self.assertRaisesRegex(ValueError, "world-writable"):
+                resolve_aq_tool(tool)
+
 
 class RuntimePathTests(unittest.TestCase):
     def test_default_context_path_uses_runtime_data_dir(self):
