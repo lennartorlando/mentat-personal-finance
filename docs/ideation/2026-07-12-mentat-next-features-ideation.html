@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ideation: Mentat next features</title>
+  <style>
+    :root { --ink:#18312c; --muted:#5f706d; --paper:#f7f8f4; --panel:#ffffff; --line:#d8e1dc; --teal:#147a69; --teal-soft:#e2f2ed; --gold:#9a6410; --gold-soft:#fff3dc; --rose:#9d443a; --rose-soft:#fce9e6; --shadow:0 12px 30px rgba(24,49,44,.08); }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--paper); color:var(--ink); font:16px/1.55 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    a { color:var(--teal); text-underline-offset:3px; }
+    code { font: .9em ui-monospace, SFMono-Regular, Menlo, monospace; background:#edf2ef; padding:.08rem .28rem; border-radius:3px; }
+    .page { width:min(1020px, calc(100% - 32px)); margin:0 auto; padding:42px 0 64px; }
+    header { border-bottom:1px solid var(--line); padding-bottom:28px; }
+    .eyebrow { margin:0 0 10px; color:var(--teal); font-size:.77rem; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
+    h1 { margin:0; font-size:clamp(2rem, 5vw, 3.35rem); line-height:1.05; letter-spacing:0; }
+    .lede { max-width:71ch; margin:18px 0 0; color:var(--muted); font-size:1.1rem; }
+    .metadata { display:flex; flex-wrap:wrap; gap:8px; margin-top:22px; }
+    .chip { border:1px solid var(--line); background:var(--panel); border-radius:4px; padding:5px 9px; color:var(--muted); font-size:.83rem; }
+    nav { margin:26px 0 0; display:flex; flex-wrap:wrap; gap:8px; }
+    nav a { background:var(--teal-soft); border:1px solid #bedfd6; border-radius:4px; color:var(--ink); padding:6px 10px; font-size:.86rem; font-weight:700; text-decoration:none; }
+    section { margin-top:42px; }
+    h2 { margin:0 0 14px; font-size:1.45rem; line-height:1.2; }
+    h3 { margin:0; font-size:1.12rem; line-height:1.25; }
+    p { max-width:75ch; }
+    .context { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+    .context article, .idea, .callout { background:var(--panel); border:1px solid var(--line); border-radius:6px; box-shadow:var(--shadow); }
+    .context article { padding:18px; }
+    .context p { margin:8px 0 0; color:var(--muted); }
+    .axes { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }
+    .axis { background:var(--teal-soft); border:1px solid #bedfd6; border-radius:6px; padding:12px; font-size:.9rem; font-weight:700; }
+    .callout { padding:18px; border-color:#d8c28d; background:var(--gold-soft); }
+    .callout strong { display:block; margin-bottom:4px; }
+    .jump-list { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 18px; }
+    .jump-list a { border:1px solid var(--line); border-radius:4px; padding:5px 8px; background:var(--panel); text-decoration:none; font-size:.86rem; }
+    .idea { padding:22px; margin-top:16px; }
+    .idea-head { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; }
+    .rank { color:var(--teal); font-size:.83rem; font-weight:800; letter-spacing:.06em; }
+    .stats { display:flex; flex-wrap:wrap; gap:6px; justify-content:flex-end; }
+    .stat { border-radius:4px; padding:4px 7px; font-size:.78rem; font-weight:800; white-space:nowrap; }
+    .confidence-high { background:var(--teal-soft); color:#075747; }
+    .confidence-medium { background:var(--gold-soft); color:#724a0a; }
+    .complexity { background:#edf2ef; color:#465a55; }
+    .idea > p { margin:13px 0; }
+    dl { display:grid; grid-template-columns:110px minmax(0,1fr); gap:8px 16px; margin:16px 0 0; padding-top:15px; border-top:1px solid var(--line); }
+    dt { font-weight:800; }
+    dd { margin:0; color:var(--muted); }
+    .visual { margin:18px 0 0; padding:12px; border:1px solid var(--line); border-radius:5px; background:#fbfcfa; overflow-x:auto; }
+    .visual figcaption { color:var(--muted); font-size:.83rem; margin-top:7px; }
+    svg { display:block; min-width:680px; width:100%; height:auto; }
+    .rejections { width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--line); box-shadow:var(--shadow); }
+    .rejections th, .rejections td { padding:12px; text-align:left; vertical-align:top; border-bottom:1px solid var(--line); }
+    .rejections th { background:#eef3f0; font-size:.85rem; }
+    .rejections tr:last-child td { border-bottom:0; }
+    footer { margin-top:52px; color:var(--muted); font-size:.82rem; border-top:1px solid var(--line); padding-top:16px; }
+    @media (max-width:720px) { .page { width:min(100% - 24px, 1020px); padding-top:26px; } .context, .axes { grid-template-columns:1fr; } .idea-head { display:block; } .stats { justify-content:flex-start; margin-top:10px; } dl { grid-template-columns:1fr; gap:3px; } dd { margin-bottom:10px; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <p class="eyebrow">Feature discovery</p>
+      <h1>Ideation: Mentat next features</h1>
+      <p class="lede">A ranked set of feature directions for turning Mentat from a secure balance-export CLI into a private system that helps people understand their full financial position and its implications.</p>
+      <div class="metadata"><span class="chip">Date: <time datetime="2026-07-12">2026-07-12</time></span><span class="chip">Topic: mentat-next-features</span><span class="chip">Mode: repo-grounded</span></div>
+      <nav aria-label="Document sections"><a href="#grounding">Grounding</a><a href="#axes">Axes</a><a href="#ideas">Ranked ideas</a><a href="#rejections">Cuts</a></nav>
+    </header>
+
+    <section id="grounding">
+      <h2>Grounding context</h2>
+      <div class="context">
+        <article><h3>Current product reality</h3><p>Mentat has a security-hardened AqBanking/FinTS CLI for user setup, account discovery and balance CSV export. It has no local ledger, transaction ingestion, tagging, reports or dashboard yet.</p></article>
+        <article><h3>Strategy constraint</h3><p>The primary value is not aggregation alone. Mentat must turn distributed European finance data into understandable changes and implications while staying local-first and avoiding financial actions.</p></article>
+        <article><h3>Existing product direction</h3><p>The current product plan already commits to a canonical local ledger, CSV fallback imports, deterministic tagging before LLM help, factual reports before narrative, and a read-only dashboard only after those contracts stabilize.</p></article>
+        <article><h3>External signal</h3><p>Established local finance tools treat imports, duplicate handling and user-owned rules as core product capability, not plumbing. That reinforces a trustworthy data loop before an insight surface.</p></article>
+      </div>
+    </section>
+
+    <section id="axes">
+      <h2>Topic axes</h2>
+      <div class="axes">
+        <div class="axis">Trusted financial truth</div>
+        <div class="axis">Heterogeneous data intake</div>
+        <div class="axis">Monthly insight and implications</div>
+        <div class="axis">Explainable automation</div>
+      </div>
+    </section>
+
+    <section>
+      <div class="callout"><strong>Top pick: build the verified local ledger and import path next, with the Monthly Financial Close as the first finished user outcome.</strong>This preserves the strategy's insight-first ambition while giving it a factual, privacy-preserving foundation. A dashboard or LLM layer before this loop would only make incomplete data look more polished.</div>
+    </section>
+
+    <section id="ideas">
+      <h2>Ranked ideas</h2>
+      <div class="jump-list"><a href="#idea-1">1. Financial Close</a><a href="#idea-2">2. Verified Ledger</a><a href="#idea-3">3. Import Studio</a><a href="#idea-4">4. Confidence Map</a><a href="#idea-5">5. Explain the Delta</a><a href="#idea-6">6. Review Inbox</a><a href="#idea-7">7. Guardrails</a></div>
+
+      <article class="idea" id="idea-1">
+        <div class="idea-head"><div><p class="rank">01 · Monthly insight and implications</p><h3>Monthly Financial Close</h3></div><div class="stats"><span class="stat confidence-high">Confidence 92%</span><span class="stat complexity">Complexity High</span></div></div>
+        <p>A deliberate monthly workflow: sync or import available sources, surface missing or stale ones, reconcile the snapshot, and produce a factual summary of net worth, cash, income, expenses and meaningful changes. It replaces the monthly spreadsheet ritual with an explicit moment of financial clarity, not an always-on pile of charts.</p>
+        <dl><dt>Basis</dt><dd><strong>direct:</strong> The strategy's primary user currently needs a complete overview before investments; the product plan names a private monthly report as the first end-to-end value loop.</dd><dt>Rationale</dt><dd>It makes the intended user value testable: Mentat either produces a trustworthy monthly overview or clearly says what is missing.</dd><dt>Downsides</dt><dd>It depends on the ledger, source ingestion and confidence checks below. The right first slice should remain factual and local, without an LLM narrative.</dd></dl>
+        <figure class="visual"><svg viewBox="0 0 760 170" role="img" aria-label="Financial close flow from sources to implications"><defs><marker id="arrow-a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#147a69"/></marker></defs><rect x="18" y="56" width="125" height="56" rx="6" fill="#e2f2ed" stroke="#147a69"/><text x="80" y="80" text-anchor="middle" font-size="15" fill="#18312c" font-weight="700">Sync and import</text><text x="80" y="99" text-anchor="middle" font-size="12" fill="#5f706d">banks, brokers, files</text><path d="M144 84 H220" stroke="#147a69" stroke-width="2" marker-end="url(#arrow-a)"/><rect x="224" y="56" width="125" height="56" rx="6" fill="#fff3dc" stroke="#9a6410"/><text x="286" y="80" text-anchor="middle" font-size="15" fill="#18312c" font-weight="700">Check coverage</text><text x="286" y="99" text-anchor="middle" font-size="12" fill="#5f706d">missing and stale data</text><path d="M350 84 H426" stroke="#147a69" stroke-width="2" marker-end="url(#arrow-a)"/><rect x="430" y="56" width="125" height="56" rx="6" fill="#e2f2ed" stroke="#147a69"/><text x="492" y="80" text-anchor="middle" font-size="15" fill="#18312c" font-weight="700">Freeze snapshot</text><text x="492" y="99" text-anchor="middle" font-size="12" fill="#5f706d">a dated local truth</text><path d="M556 84 H632" stroke="#147a69" stroke-width="2" marker-end="url(#arrow-a)"/><rect x="636" y="56" width="106" height="56" rx="6" fill="#e2f2ed" stroke="#147a69"/><text x="689" y="80" text-anchor="middle" font-size="15" fill="#18312c" font-weight="700">Explain</text><text x="689" y="99" text-anchor="middle" font-size="12" fill="#5f706d">what changed</text></svg><figcaption>Illustrative direction: a complete monthly loop makes data quality visible before conclusions are drawn.</figcaption></figure>
+      </article>
+
+      <article class="idea" id="idea-2">
+        <div class="idea-head"><div><p class="rank">02 · Trusted financial truth</p><h3>Verified Local Ledger</h3></div><div class="stats"><span class="stat confidence-high">Confidence 96%</span><span class="stat complexity">Complexity High</span></div></div>
+        <p>Create the canonical local record of accounts, dated balances, transactions, holdings, imports and provenance. Every record retains its source identity and import timestamp; duplicate detection, transfer matching and corrections are explicit rather than hidden in exported CSVs.</p>
+        <dl><dt>Basis</dt><dd><strong>direct:</strong> The current CLI appends balance rows to CSV, while the product plan explicitly makes a normalized ledger the source of truth for all connectors and surfaces.</dd><dt>Rationale</dt><dd>It is the prerequisite for showing one total without double-counting, explaining any movement, or offering identical facts to a person and an agent.</dd><dt>Downsides</dt><dd>It is foundational work with little immediate visual payoff. Scope must stay file-backed and auditable before choosing a database or server.</dd></dl>
+      </article>
+
+      <article class="idea" id="idea-3">
+        <div class="idea-head"><div><p class="rank">03 · Heterogeneous data intake</p><h3>Import Profile Studio</h3></div><div class="stats"><span class="stat confidence-high">Confidence 90%</span><span class="stat complexity">Complexity Medium</span></div></div>
+        <p>Turn each broker, app-bank or exchange export into a repeatable local import profile: map columns once, preview normalized rows, identify duplicates, and save the profile locally. The product should report what it recognized, what it skipped and why, rather than making users write a custom parser for every CSV.</p>
+        <dl><dt>Basis</dt><dd><strong>direct + external:</strong> The plan treats CSV adapters as first-class coverage; <a href="https://actualbudget.org/docs/transactions/importing/">Actual Budget's import flow</a> emphasizes field mapping and duplicate avoidance for financial files.</dd><dt>Rationale</dt><dd>It covers the banks and brokers that will never be reached reliably through one live integration, while preserving the local-first boundary.</dd><dt>Downsides</dt><dd>Import formats drift. Profiles need clear validation, synthetic fixtures and a non-destructive preview mode.</dd></dl>
+      </article>
+
+      <article class="idea" id="idea-4">
+        <div class="idea-head"><div><p class="rank">04 · Trusted financial truth</p><h3>Data Confidence Map</h3></div><div class="stats"><span class="stat confidence-high">Confidence 88%</span><span class="stat complexity">Complexity Medium</span></div></div>
+        <p>Show which expected accounts and depots are current, stale, missing, partially imported or awaiting review. Every dashboard total and report section carries an understandable coverage signal, so Mentat never silently presents an incomplete net-worth number as complete.</p>
+        <dl><dt>Basis</dt><dd><strong>direct:</strong> The strategy measures successful, current account and depot coverage; the product plan requires freshness and source confidence in monthly reporting.</dd><dt>Rationale</dt><dd>Trust is created as much by showing what Mentat does not know as by visualizing what it does.</dd><dt>Downsides</dt><dd>It requires a user-declared source inventory and clear semantics for "current" across sources with different refresh capabilities.</dd></dl>
+      </article>
+
+      <article class="idea" id="idea-5">
+        <div class="idea-head"><div><p class="rank">05 · Monthly insight and implications</p><h3>Explain the Delta</h3></div><div class="stats"><span class="stat confidence-high">Confidence 86%</span><span class="stat complexity">Complexity Medium</span></div></div>
+        <p>For every meaningful month-over-month change, let the user trace the result back to the accounts, movements, prices or imports that caused it. The first version is factual: "cash changed because of these booked flows" and "portfolio value changed because of these positions"; narrative generation remains optional and never invents the evidence.</p>
+        <dl><dt>Basis</dt><dd><strong>direct:</strong> Mentat's strategy differentiates on implications, while the product plan explicitly separates factual metrics from optional LLM narrative and requires provenance.</dd><dt>Rationale</dt><dd>This is the shortest route from a number to an informed conversation or decision, and it is more differentiated than another aggregate chart.</dd><dt>Downsides</dt><dd>Attribution gets nuanced when a period has transfers, market movement and partial data. The UI must preserve uncertainty instead of forcing a single cause.</dd></dl>
+        <figure class="visual"><svg viewBox="0 0 760 180" role="img" aria-label="Explain a financial delta with evidence"><rect x="30" y="33" width="160" height="72" rx="6" fill="#e2f2ed" stroke="#147a69"/><text x="110" y="61" text-anchor="middle" font-size="16" fill="#18312c" font-weight="700">A changed metric</text><text x="110" y="82" text-anchor="middle" font-size="12" fill="#5f706d">cash, net worth, spend</text><path d="M190 69 H281" stroke="#147a69" stroke-width="2"/><path d="M276 64 L286 69 L276 74" fill="none" stroke="#147a69" stroke-width="2"/><rect x="290" y="20" width="190" height="38" rx="5" fill="#fff3dc" stroke="#9a6410"/><text x="385" y="44" text-anchor="middle" font-size="13" fill="#18312c">booked transactions</text><rect x="290" y="71" width="190" height="38" rx="5" fill="#fff3dc" stroke="#9a6410"/><text x="385" y="95" text-anchor="middle" font-size="13" fill="#18312c">position and price changes</text><rect x="290" y="122" width="190" height="38" rx="5" fill="#fff3dc" stroke="#9a6410"/><text x="385" y="146" text-anchor="middle" font-size="13" fill="#18312c">data freshness caveats</text><path d="M480 39 H571" stroke="#147a69" stroke-width="2"/><path d="M480 90 H571" stroke="#147a69" stroke-width="2"/><path d="M480 141 H571" stroke="#147a69" stroke-width="2"/><path d="M566 34 L576 39 L566 44 M566 85 L576 90 L566 95 M566 136 L576 141 L566 146" fill="none" stroke="#147a69" stroke-width="2"/><rect x="580" y="57" width="150" height="66" rx="6" fill="#e2f2ed" stroke="#147a69"/><text x="655" y="83" text-anchor="middle" font-size="15" fill="#18312c" font-weight="700">Evidence-backed</text><text x="655" y="103" text-anchor="middle" font-size="12" fill="#5f706d">implication</text></svg><figcaption>Illustrative direction: conclusions retain a visible path back to data and uncertainty.</figcaption></figure>
+      </article>
+
+      <article class="idea" id="idea-6">
+        <div class="idea-head"><div><p class="rank">06 · Explainable automation</p><h3>Review Inbox and Local Category Memory</h3></div><div class="stats"><span class="stat confidence-high">Confidence 84%</span><span class="stat complexity">Complexity Medium</span></div></div>
+        <p>Place new, unclassified, conflicting or suspicious transactions into one review queue. When a user corrects a merchant or category, Mentat proposes a deterministic local rule, previews its future effect and records the rule's provenance; no classification mutates silently.</p>
+        <dl><dt>Basis</dt><dd><strong>direct + external:</strong> The plan already calls for deterministic rules and explicit review. <a href="https://actualbudget.org/docs/budgeting/rules/">Actual Budget</a> demonstrates that user-owned rules can learn from repeated category and payee corrections.</dd><dt>Rationale</dt><dd>This turns manual cleanup into compounding private automation while preserving the trust boundary needed for financial data.</dd><dt>Downsides</dt><dd>Rule precedence and overrides can become confusing. The first version should support a small, inspectable rule vocabulary and dry runs.</dd></dl>
+      </article>
+
+      <article class="idea" id="idea-7">
+        <div class="idea-head"><div><p class="rank">07 · Monthly insight and implications</p><h3>Personal Decision Guardrails</h3></div><div class="stats"><span class="stat confidence-medium">Confidence 72%</span><span class="stat complexity">Complexity Medium</span></div></div>
+        <p>Let people define their own cash floor, reserve, allocation bands, recurring commitments or planned investment amount. Mentat then reports distance to those self-authored guardrails and offers scenarios such as "what remains after the planned transfer" without selecting investments or initiating actions.</p>
+        <dl><dt>Basis</dt><dd><strong>reasoned:</strong> The strategy's user seeks a complete overview before investments; a user-defined constraint converts that overview into a concrete, non-advisory implication.</dd><dt>Rationale</dt><dd>It gives the insight layer a personal purpose without crossing into financial recommendations or automated execution.</dd><dt>Downsides</dt><dd>Scenarios can be mistaken for advice. Language must be strictly descriptive, assumptions visible, and defaults conservative.</dd></dl>
+      </article>
+    </section>
+
+    <section id="rejections">
+      <h2>Rejection summary</h2>
+      <table class="rejections"><thead><tr><th>Considered idea</th><th>Reason cut</th></tr></thead><tbody>
+        <tr><td>Transfer and ownership matcher as a standalone feature</td><td>Important, but it belongs inside the verified ledger and import reconciliation rather than becoming an early separate surface.</td></tr>
+        <tr><td>Money-flow dashboard first</td><td>The plan correctly keeps a dashboard downstream of ledger, tagging and reporting; polished charts cannot repair missing or stale data.</td></tr>
+        <tr><td>LLM finance chat</td><td>Too easy to create unsupported explanations before a factual data model and provenance path exist.</td></tr>
+        <tr><td>Open Banking provider marketplace</td><td>Connector breadth would distract from the working FinTS path and practical local import fallbacks.</td></tr>
+        <tr><td>Two-way Google Sheets source of truth</td><td>Useful as export compatibility later, but it would undermine the strategy's canonical local ledger and reintroduce manual drift.</td></tr>
+        <tr><td>Mobile-first app</td><td>Premature surface expansion before the personal workflow is reliable on one local machine.</td></tr>
+        <tr><td>Payment initiation</td><td>Explicitly outside the initial product scope; Mentat is for understanding, not moving money.</td></tr>
+        <tr><td>Tax filing autopilot</td><td>High regulatory complexity and outside the initial promise of cross-account analysis.</td></tr>
+        <tr><td>Household or team collaboration</td><td>Potentially useful later, but not grounded strongly enough to displace the personal end-to-end value loop.</td></tr>
+      </tbody></table>
+    </section>
+
+    <footer>Composed <time datetime="2026-07-12T13:25:00Z">2026-07-12T13:25Z</time> by <code>ce-ideate</code> from the Mentat strategy, current repository state, product plans, and external local-finance patterns.</footer>
+  </main>
+</body>
+</html>

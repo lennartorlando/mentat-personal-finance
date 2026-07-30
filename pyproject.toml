@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "personal-finance-agent"
 version = "0.1.0"
-description = "Local-first toolkit for personal finance data interaction in Europe."
+description = "Mentat: local-first personal finance data interaction in Europe."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -22,8 +22,8 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/lennartorlando/personal-finance-agent"
-Issues = "https://github.com/lennartorlando/personal-finance-agent/issues"
+Homepage = "https://github.com/lennartorlando/mentat-personal-finance"
+Issues = "https://github.com/lennartorlando/mentat-personal-finance/issues"
 
 [project.scripts]
 personal-finance-agent = "personal_finance_agent.cli:main"
@@ -31,4 +31,3 @@ pfa = "personal_finance_agent.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
