@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 import sys
 from pathlib import Path
 
 from . import __version__
 from .aqbanking import (
     AqContext,
-    append_csv,
     base,
     ensure_private_file,
     parse_balance_output,
@@ -19,6 +19,7 @@ from .aqbanking import (
     run_interactive,
     run_with_optional_pinfile,
 )
+from .ledger import JsonlLedger, LedgerValidationError, balance_record_from_row, export_balances_csv
 from .security import validate_fints_pin
 
 
@@ -83,6 +84,13 @@ def cmd_aq_balances(args: argparse.Namespace) -> int:
     ctx = context(args)
     context_file = resolve_runtime_path(ctx, args.context, ctx.context_file, args.allow_outside_runtime, "AqBanking context")
     csv_path = resolve_runtime_path(ctx, args.csv, ctx.data_dir / "balances.csv", args.allow_outside_runtime, "CSV export")
+    ledger_path = resolve_runtime_path(
+        ctx,
+        args.ledger,
+        ctx.data_dir / "ledger.jsonl",
+        args.allow_outside_runtime,
+        "Ledger",
+    )
     request_command = base(ctx, "aqbanking-cli", args.aqbanking_cli) + [
         "request",
         "--balance",
@@ -101,8 +109,58 @@ def cmd_aq_balances(args: argparse.Namespace) -> int:
         ctx,
         base(ctx, "aqbanking-cli", args.aqbanking_cli) + ["listbal", f"--ctxfile={context_file}", f"--template={template}"],
     )
-    rows = parse_balance_output(output, args.date)
-    append_csv(csv_path, rows)
+    parsed = parse_balance_output(output, args.date)
+    diagnostics = list(parsed.diagnostics)
+    records = []
+    for row in parsed:
+        try:
+            records.append(balance_record_from_row(row))
+        except LedgerValidationError as exc:
+            diagnostics.extend(exc.diagnostics)
+
+    ledger = JsonlLedger(ledger_path)
+    result = ledger.add(records)
+    exported = export_balances_csv(
+        csv_path,
+        (record for record in result.records if record.record_type == "balance"),
+    )
+    print(
+        f"Ledger import: {result.added} added, {result.duplicates} duplicate(s); "
+        f"exported {exported} balance row(s) to {csv_path}."
+    )
+    for diagnostic in diagnostics:
+        print(json.dumps({"diagnostic": diagnostic.to_dict()}, sort_keys=True), file=sys.stderr)
+    return 2 if diagnostics else 0
+
+
+def cmd_ledger_inspect(args: argparse.Namespace) -> int:
+    ctx = context(args)
+    path = resolve_runtime_path(ctx, args.ledger, ctx.data_dir / "ledger.jsonl", args.allow_outside_runtime, "Ledger")
+    records = JsonlLedger(path).records(args.record_type)
+    if args.json:
+        print(json.dumps({"count": len(records), "records": [record.to_dict() for record in records]}, sort_keys=True))
+    else:
+        counts: dict[str, int] = {}
+        for record in records:
+            counts[record.record_type] = counts.get(record.record_type, 0) + 1
+        print(f"Ledger: {path}")
+        print(f"Records: {len(records)}")
+        for record_type, count in sorted(counts.items()):
+            print(f"  {record_type}: {count}")
+    return 0
+
+
+def cmd_ledger_export(args: argparse.Namespace) -> int:
+    ctx = context(args)
+    ledger_path = resolve_runtime_path(
+        ctx, args.ledger, ctx.data_dir / "ledger.jsonl", args.allow_outside_runtime, "Ledger"
+    )
+    csv_path = resolve_runtime_path(
+        ctx, args.csv, ctx.data_dir / "balances.csv", args.allow_outside_runtime, "CSV export"
+    )
+    records = JsonlLedger(ledger_path).records("balance")
+    exported = export_balances_csv(csv_path, records)
+    print(f"Exported {exported} balance row(s) from {ledger_path} to {csv_path}.")
     return 0
 
 
@@ -156,11 +214,32 @@ def build_parser() -> argparse.ArgumentParser:
     add_root(aq_balances)
     aq_balances.add_argument("--context", type=Path)
     aq_balances.add_argument("--csv", type=Path)
+    aq_balances.add_argument("--ledger", type=Path)
     aq_balances.add_argument("--date", default=dt.date.today().isoformat())
     aq_balances.add_argument("--iban")
     aq_balances.add_argument("--safe-pin-user")
     aq_balances.add_argument("--allow-outside-runtime", action="store_true")
     aq_balances.set_defaults(func=cmd_aq_balances)
+
+    ledger = subparsers.add_parser("ledger", help="Inspect and export the local JSONL ledger.")
+    ledger_sub = ledger.add_subparsers(dest="ledger_command", required=True)
+
+    ledger_inspect = ledger_sub.add_parser("inspect", help="Inspect normalized ledger records.")
+    add_root(ledger_inspect)
+    ledger_inspect.add_argument("--ledger", type=Path)
+    ledger_inspect.add_argument(
+        "--record-type", choices=("account", "balance", "transaction", "holding")
+    )
+    ledger_inspect.add_argument("--json", action="store_true", help="Emit one machine-readable JSON document.")
+    ledger_inspect.add_argument("--allow-outside-runtime", action="store_true")
+    ledger_inspect.set_defaults(func=cmd_ledger_inspect)
+
+    ledger_export = ledger_sub.add_parser("export", help="Export ledger balances to CSV.")
+    add_root(ledger_export)
+    ledger_export.add_argument("--ledger", type=Path)
+    ledger_export.add_argument("--csv", type=Path)
+    ledger_export.add_argument("--allow-outside-runtime", action="store_true")
+    ledger_export.set_defaults(func=cmd_ledger_export)
 
     return parser
 

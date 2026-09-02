@@ -16,12 +16,21 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from .ledger import export as ledger_export
+from .ledger.models import Diagnostic
+from .private_files import (
+    PRIVATE_DIR_MODE,
+    PRIVATE_FILE_MODE,
+    chmod_private,
+    ensure_private_dir,
+    ensure_private_file,
+)
 from .security import validate_fints_pin
 
 
-PRIVATE_DIR_MODE = 0o700
-PRIVATE_FILE_MODE = 0o600
-SPREADSHEET_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+SPREADSHEET_FORMULA_PREFIXES = ledger_export.SPREADSHEET_FORMULA_PREFIXES
+spreadsheet_safe_cell = ledger_export.spreadsheet_safe_cell
+spreadsheet_safe_row = ledger_export.spreadsheet_safe_row
 TRUSTED_TOOL_PREFIXES = (
     Path("/opt/homebrew").resolve(),
     Path("/usr/local").resolve(),
@@ -61,21 +70,6 @@ def is_relative_to(path: Path, parent: Path) -> bool:
     except ValueError:
         return False
     return True
-
-
-def chmod_private(path: Path, mode: int) -> None:
-    if os.name == "posix":
-        os.chmod(path, mode)
-
-
-def ensure_private_dir(path: Path) -> None:
-    path.mkdir(parents=True, exist_ok=True)
-    chmod_private(path, PRIVATE_DIR_MODE)
-
-
-def ensure_private_file(path: Path) -> None:
-    if path.exists():
-        chmod_private(path, PRIVATE_FILE_MODE)
 
 
 def is_unsafe_world_writable_dir(path: Path) -> bool:
@@ -228,11 +222,35 @@ def resolve_runtime_path(
     return resolved
 
 
-def parse_balance_output(output: str, snapshot_date: str) -> list[dict[str, str]]:
+class BalanceParseResult(list[dict[str, str]]):
+    """Parsed rows with diagnostics while retaining the legacy list contract."""
+
+    def __init__(self, rows: list[dict[str, str]], diagnostics: list[Diagnostic]):
+        super().__init__(rows)
+        self.diagnostics = tuple(diagnostics)
+
+
+def parse_balance_output(output: str, snapshot_date: str) -> BalanceParseResult:
     rows: list[dict[str, str]] = []
-    for line in output.splitlines():
+    diagnostics: list[Diagnostic] = []
+    field_names = ("balance_date", "balance", "iban", "bank_code", "account_number")
+    for line_number, line in enumerate(output.splitlines(), start=1):
         parts = line.split("\t")
         if len(parts) != 5:
+            if len(parts) < len(field_names):
+                diagnostics.extend(
+                    Diagnostic("aqbanking:listbal", field, "field is missing", line_number)
+                    for field in field_names[len(parts) :]
+                )
+            else:
+                diagnostics.append(
+                    Diagnostic(
+                        "aqbanking:listbal",
+                        "record",
+                        f"expected 5 tab-separated fields, received {len(parts)}",
+                        line_number,
+                    )
+                )
             continue
         balance_date, value, iban, bank_code, account_number = parts
         rows.append(
@@ -247,7 +265,7 @@ def parse_balance_output(output: str, snapshot_date: str) -> list[dict[str, str]
                 "exported_at": dt.datetime.now(dt.timezone.utc).isoformat(),
             }
         )
-    return rows
+    return BalanceParseResult(rows, diagnostics)
 
 
 def append_csv(path: Path, rows: list[dict[str, str]]) -> None:
@@ -264,13 +282,3 @@ def append_csv(path: Path, rows: list[dict[str, str]]) -> None:
         writer.writerows(spreadsheet_safe_row(row) for row in rows)
     ensure_private_file(path)
     print(f"Appended {len(rows)} row(s) to {path}.")
-
-
-def spreadsheet_safe_cell(value: str) -> str:
-    if value.startswith(SPREADSHEET_FORMULA_PREFIXES):
-        return "'" + value
-    return value
-
-
-def spreadsheet_safe_row(row: dict[str, str]) -> dict[str, str]:
-    return {key: spreadsheet_safe_cell(value) for key, value in row.items()}
