@@ -1,6 +1,6 @@
 """Public API for the normalized, local JSONL ledger."""
 
-from .export import export_balances_csv
+from .export import export_balances_csv, reject_unsafe_csv_overwrite
 from .models import (
     AccountRecord,
     BalanceRecord,
@@ -34,5 +34,6 @@ __all__ = [
     "export_balances_csv",
     "holding_record",
     "normalize_purpose",
+    "reject_unsafe_csv_overwrite",
     "transaction_records",
 ]

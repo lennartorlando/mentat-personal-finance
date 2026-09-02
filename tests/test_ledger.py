@@ -1,8 +1,10 @@
 import csv
+import importlib
 import io
 import json
 import multiprocessing
 import os
+import queue
 import stat
 import tempfile
 import unittest
@@ -56,6 +58,34 @@ def _try_nonblocking_ledger_lock(ledger_path: str, results) -> None:
             fcntl.flock(descriptor, fcntl.LOCK_UN)
     finally:
         os.close(descriptor)
+
+
+def _export_after_validation_signal(
+    csv_path: str,
+    ledger_path: str,
+    record,
+    validated,
+    release,
+    results,
+) -> None:
+    export_module = importlib.import_module("personal_finance_agent.ledger.export")
+    actual_reject = export_module.reject_unsafe_csv_overwrite
+
+    def signal_after_validation(path, source_ledger_path):
+        actual_reject(path, source_ledger_path)
+        validated.put(True)
+        if release is not None:
+            release.wait()
+
+    export_module.reject_unsafe_csv_overwrite = signal_after_validation
+    try:
+        export_module.export_balances_csv(
+            Path(csv_path), [record], ledger_path=Path(ledger_path)
+        )
+    except ValueError:
+        results.put("rejected")
+    else:
+        results.put("exported")
 
 
 def balance_row() -> dict[str, str]:
@@ -231,6 +261,43 @@ class LedgerRecordTests(unittest.TestCase):
                 },
             )
 
+    def test_changed_transaction_provenance_returns_structured_diagnostic(self):
+        first_provenance = Provenance("synthetic-csv", IMPORTED_AT, "first.csv")
+        second_provenance = Provenance("synthetic-csv", IMPORTED_AT, "second.csv")
+        rows = [{
+            "account_id": "acct_synthetic",
+            "booking_date": "2026-09-01",
+            "amount": "-10.00 EUR",
+            "purpose": "Auditable transaction",
+        }]
+        original = transaction_records(
+            rows, first_provenance, complete_source_slice=True
+        )[0]
+        reassigned = transaction_records(
+            rows, second_provenance, complete_source_slice=True
+        )[0]
+        self.assertEqual(reassigned.id, original.id)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = JsonlLedger(Path(tmp) / "ledger.jsonl")
+            ledger.add([original])
+
+            result = ledger.add([reassigned])
+
+            self.assertEqual((result.added, result.updated, result.duplicates), (0, 1, 0))
+            self.assertEqual(ledger.records("transaction"), [reassigned])
+            self.assertEqual(
+                [diagnostic.to_dict() for diagnostic in result.diagnostics],
+                [{
+                    "input": "second.csv",
+                    "field": "provenance.source_ref",
+                    "message": "record provenance changed",
+                    "record_id": original.id,
+                    "previous_value": "first.csv",
+                    "new_value": "second.csv",
+                }],
+            )
+
     def test_imported_at_only_change_is_duplicate_and_leaves_jsonl_byte_identical(self):
         with tempfile.TemporaryDirectory() as tmp:
             ledger = JsonlLedger(Path(tmp) / "ledger.jsonl")
@@ -258,7 +325,9 @@ class LedgerRecordTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             csv_path = Path(tmp) / "balances.csv"
-            export_balances_csv(csv_path, [record])
+            export_balances_csv(
+                csv_path, [record], ledger_path=Path(tmp) / "ledger.jsonl"
+            )
             with csv_path.open(newline="", encoding="utf-8") as handle:
                 self.assertEqual(next(csv.DictReader(handle))["account_number"], "synthetic-account")
 
@@ -266,7 +335,11 @@ class LedgerRecordTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             csv_path = Path(tmp) / "balances.csv"
 
-            export_balances_csv(csv_path, formula_prefix_balance_records())
+            export_balances_csv(
+                csv_path,
+                formula_prefix_balance_records(),
+                ledger_path=Path(tmp) / "ledger.jsonl",
+            )
 
             with csv_path.open(newline="", encoding="utf-8") as handle:
                 balances = [row["balance"] for row in csv.DictReader(handle)]
@@ -592,36 +665,194 @@ class LedgerRecordTests(unittest.TestCase):
             ) as fsync_parent:
                 ledger.add([balance_record_from_row(balance_row())])
 
-            fsync_parent.assert_called_once_with(ledger.path)
+            fsync_parent.assert_any_call(ledger.path)
+            fsync_parent.assert_any_call(
+                ledger.path.resolve().with_name(".ledger.jsonl.lineage")
+            )
+            self.assertEqual(fsync_parent.call_count, 2)
             self.assertTrue(ledger.path.exists())
 
     def test_failed_csv_replace_preserves_existing_export_and_removes_temporary_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             csv_path = root / "balances.csv"
-            original_bytes = b"previous,export\nleave,this intact\n"
-            csv_path.write_bytes(original_bytes)
+            ledger_path = root / "ledger.jsonl"
+            export_balances_csv(
+                csv_path,
+                [balance_record_from_row(balance_row())],
+                ledger_path=ledger_path,
+            )
+            original_bytes = csv_path.read_bytes()
 
             with mock.patch(
                 "personal_finance_agent.ledger.export.os.replace",
                 side_effect=OSError("synthetic replace failure"),
             ):
                 with self.assertRaisesRegex(OSError, "synthetic replace failure"):
-                    export_balances_csv(csv_path, [balance_record_from_row(balance_row())])
+                    export_balances_csv(
+                        csv_path,
+                        [balance_record_from_row(balance_row())],
+                        ledger_path=ledger_path,
+                    )
 
             self.assertEqual(csv_path.read_bytes(), original_bytes)
             self.assertEqual(list(root.glob(".balances.csv.*.tmp")), [])
+
+    def test_csv_export_rejects_same_path_replacement_ledger(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ledger_path = root / "ledger.jsonl"
+            original_ledger = JsonlLedger(ledger_path)
+            original_record = balance_record_from_row(balance_row())
+            original_ledger.add([original_record])
+            csv_path = root / "balances.csv"
+            export_balances_csv(csv_path, [original_record], ledger_path=ledger_path)
+            original_csv = csv_path.read_bytes()
+
+            replacement_path = root / "replacement.jsonl"
+            replacement_ledger = JsonlLedger(replacement_path)
+            replacement_row = balance_row()
+            replacement_row["balance_date"] = "03.09.2026"
+            replacement_record = balance_record_from_row(replacement_row)
+            replacement_ledger.add([replacement_record])
+            os.replace(replacement_path, ledger_path)
+
+            with self.assertRaisesRegex(ValueError, "not exported by this ledger"):
+                export_balances_csv(
+                    csv_path, [replacement_record], ledger_path=ledger_path
+                )
+
+            self.assertEqual(csv_path.read_bytes(), original_csv)
+
+    def test_csv_export_preserves_lineage_across_normal_ledger_update(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ledger = JsonlLedger(root / "ledger.jsonl")
+            first = balance_record_from_row(balance_row())
+            ledger.add([first])
+            csv_path = root / "balances.csv"
+            export_balances_csv(csv_path, [first], ledger_path=ledger.path)
+            with csv_path.open(newline="", encoding="utf-8") as handle:
+                original_marker = next(csv.DictReader(handle))["ledger_export_id"]
+
+            second_row = balance_row()
+            second_row["balance_date"] = "03.09.2026"
+            second = balance_record_from_row(second_row)
+            ledger.add([second])
+            export_balances_csv(
+                csv_path, ledger.records("balance"), ledger_path=ledger.path
+            )
+
+            with csv_path.open(newline="", encoding="utf-8") as handle:
+                markers = {row["ledger_export_id"] for row in csv.DictReader(handle)}
+            self.assertEqual(markers, {original_marker})
+
+    def test_csv_export_rejects_mixed_row_markers_byte_identically(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ledger = JsonlLedger(root / "ledger.jsonl")
+            first = balance_record_from_row(balance_row())
+            second_row = balance_row()
+            second_row["balance_date"] = "03.09.2026"
+            second = balance_record_from_row(second_row)
+            ledger.add([first, second])
+            csv_path = root / "balances.csv"
+            export_balances_csv(csv_path, [first, second], ledger_path=ledger.path)
+            with csv_path.open(newline="", encoding="utf-8") as handle:
+                reader = csv.DictReader(handle)
+                rows = list(reader)
+                fieldnames = reader.fieldnames
+            rows[1]["ledger_export_id"] = "mentat-ledger-export-v1:different"
+            with csv_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
+            mixed_bytes = csv_path.read_bytes()
+
+            with self.assertRaisesRegex(ValueError, "not exported by this ledger"):
+                export_balances_csv(csv_path, [first, second], ledger_path=ledger.path)
+
+            self.assertEqual(csv_path.read_bytes(), mixed_bytes)
+
+    @unittest.skipUnless(os.name == "posix", "requires POSIX process locking")
+    def test_concurrent_first_exports_from_different_ledgers_do_not_overwrite(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            csv_path = root / "balances.csv"
+            first_ledger = JsonlLedger(root / "first.jsonl")
+            second_ledger = JsonlLedger(root / "second.jsonl")
+            first_record = balance_record_from_row(balance_row())
+            second_row = balance_row()
+            second_row["balance_date"] = "03.09.2026"
+            second_record = balance_record_from_row(second_row)
+            first_ledger.add([first_record])
+            second_ledger.add([second_record])
+            context = multiprocessing.get_context("fork")
+            first_validated = context.Queue()
+            second_validated = context.Queue()
+            release_first = context.Event()
+            results = context.Queue()
+            first_process = context.Process(
+                target=_export_after_validation_signal,
+                args=(
+                    str(csv_path),
+                    str(first_ledger.path),
+                    first_record,
+                    first_validated,
+                    release_first,
+                    results,
+                ),
+            )
+            second_process = context.Process(
+                target=_export_after_validation_signal,
+                args=(
+                    str(csv_path),
+                    str(second_ledger.path),
+                    second_record,
+                    second_validated,
+                    None,
+                    results,
+                ),
+            )
+            first_process.start()
+            first_validated.get(timeout=5)
+            second_process.start()
+            try:
+                second_validated.get(timeout=0.5)
+            except queue.Empty:
+                pass
+            release_first.set()
+            for process in (first_process, second_process):
+                process.join(timeout=5)
+                self.assertFalse(process.is_alive())
+                self.assertEqual(process.exitcode, 0)
+
+            self.assertEqual(
+                sorted(results.get(timeout=5) for _ in range(2)),
+                ["exported", "rejected"],
+            )
+            with csv_path.open(newline="", encoding="utf-8") as handle:
+                exported = list(csv.DictReader(handle))
+            self.assertEqual(
+                [row["balance_date"] for row in exported],
+                [first_record.balance_date],
+            )
 
     @unittest.skipUnless(os.name == "posix", "directory fsync is POSIX-specific")
     def test_csv_replace_fsyncs_file_and_parent_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             csv_path = Path(tmp) / "balances.csv"
+            ledger_path = Path(tmp) / "ledger.jsonl"
 
             with mock.patch(
                 "personal_finance_agent.ledger.export.fsync_parent_directory",
                 wraps=fsync_parent_directory,
             ) as fsync_parent:
-                export_balances_csv(csv_path, [balance_record_from_row(balance_row())])
+                export_balances_csv(
+                    csv_path,
+                    [balance_record_from_row(balance_row())],
+                    ledger_path=ledger_path,
+                )
 
             fsync_parent.assert_called_once_with(csv_path)
             self.assertTrue(csv_path.exists())
@@ -631,10 +862,18 @@ class LedgerRecordTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             csv_path = Path(tmp) / "private" / "balances.csv"
 
-            export_balances_csv(csv_path, [balance_record_from_row(balance_row())])
+            export_balances_csv(
+                csv_path,
+                [balance_record_from_row(balance_row())],
+                ledger_path=Path(tmp) / "private" / "ledger.jsonl",
+            )
 
             self.assertEqual(stat.S_IMODE(csv_path.parent.stat().st_mode), 0o700)
             self.assertEqual(stat.S_IMODE(csv_path.stat().st_mode), 0o600)
+            self.assertEqual(
+                stat.S_IMODE(csv_path.with_name(".balances.csv.lock").stat().st_mode),
+                0o600,
+            )
 
     @unittest.skipUnless(os.name == "posix", "requires POSIX permission bits")
     def test_atomic_writer_keeps_ledger_directory_and_lock_private(self):
@@ -647,6 +886,8 @@ class LedgerRecordTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(ledger.path.stat().st_mode), 0o600)
             lock_path = ledger.path.with_name(".ledger.jsonl.lock")
             self.assertEqual(stat.S_IMODE(lock_path.stat().st_mode), 0o600)
+            lineage_path = ledger.path.with_name(".ledger.jsonl.lineage")
+            self.assertEqual(stat.S_IMODE(lineage_path.stat().st_mode), 0o600)
 
     @unittest.skipUnless(os.name == "posix", "requires POSIX advisory file locking")
     def test_concurrent_imports_persist_duplicate_identifier_only_once(self):
@@ -724,7 +965,7 @@ class LedgerCliTests(unittest.TestCase):
             request.assert_not_called()
             self.assertFalse((root / "data" / "shared.data").exists())
 
-    def test_aq_balances_rejects_case_variant_ledger_and_csv_paths_before_request(self):
+    def test_aq_balances_allows_case_variant_paths_on_case_sensitive_filesystem(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             args = build_parser().parse_args([
@@ -738,7 +979,36 @@ class LedgerCliTests(unittest.TestCase):
                 "Ledger.jsonl",
             ])
 
-            with mock.patch("personal_finance_agent.cli.base") as command, mock.patch(
+            with mock.patch(
+                "personal_finance_agent.cli._filesystem_is_case_insensitive",
+                return_value=False,
+                create=True,
+            ), mock.patch("personal_finance_agent.cli.base") as command, mock.patch(
+                "personal_finance_agent.cli.run_with_optional_pinfile", return_value=17
+            ) as request:
+                self.assertEqual(cmd_aq_balances(args), 17)
+
+            command.assert_called_once()
+            request.assert_called_once()
+
+    def test_aq_balances_rejects_missing_case_variant_paths_on_case_insensitive_filesystem(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args = build_parser().parse_args([
+                "aq",
+                "balances",
+                "--root",
+                str(root),
+                "--ledger",
+                "ledger.jsonl",
+                "--csv",
+                "Ledger.jsonl",
+            ])
+
+            with mock.patch(
+                "personal_finance_agent.cli._filesystem_is_case_insensitive",
+                return_value=True,
+            ), mock.patch("personal_finance_agent.cli.base") as command, mock.patch(
                 "personal_finance_agent.cli.run_with_optional_pinfile"
             ) as request:
                 with self.assertRaisesRegex(ValueError, "different files"):
@@ -746,12 +1016,14 @@ class LedgerCliTests(unittest.TestCase):
 
             command.assert_not_called()
             request.assert_not_called()
+            self.assertFalse((root / "data" / "ledger.jsonl").exists())
 
-    def test_aq_balances_refuses_to_overwrite_csv_history_without_ledger_history(self):
+    def test_aq_balances_refuses_to_overwrite_unmarked_csv_with_ledger_history(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            ledger = JsonlLedger(root / "data" / "ledger.jsonl")
+            ledger.add([balance_record_from_row(balance_row())])
             csv_path = root / "data" / "balances.csv"
-            csv_path.parent.mkdir(parents=True)
             original_bytes = (
                 b"date,source,balance_date,balance,iban,bank_code,account_number,exported_at\n"
                 b"2026-07-01,AqBanking,2026-07-01,10.00 EUR,,bank,account,2026-07-01T10:00:00+00:00\n"
@@ -770,13 +1042,50 @@ class LedgerCliTests(unittest.TestCase):
             request.assert_not_called()
             self.assertEqual(csv_path.read_bytes(), original_bytes)
 
+    def test_ledger_export_refuses_csv_produced_by_different_ledger(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            record = balance_record_from_row(balance_row())
+            first_ledger = root / "data" / "first.jsonl"
+            second_ledger = JsonlLedger(root / "data" / "second.jsonl")
+            second_ledger.add([record])
+            csv_path = root / "data" / "balances.csv"
+            export_balances_csv(csv_path, [record], ledger_path=first_ledger)
+            original_bytes = csv_path.read_bytes()
+            args = build_parser().parse_args([
+                "ledger",
+                "export",
+                "--root",
+                str(root),
+                "--ledger",
+                "second.jsonl",
+            ])
+
+            with self.assertRaisesRegex(ValueError, "not exported by this ledger"):
+                cmd_ledger_export(args)
+
+            self.assertEqual(csv_path.read_bytes(), original_bytes)
+
+    def test_ledger_export_rejects_empty_ledger_without_creating_csv(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            csv_path = root / "data" / "balances.csv"
+            args = build_parser().parse_args(["ledger", "export", "--root", str(root)])
+
+            with self.assertRaisesRegex(ValueError, "no balance records"):
+                cmd_ledger_export(args)
+
+            self.assertFalse(csv_path.exists())
+
     def test_aq_balances_empty_input_preserves_existing_csv_and_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             ledger = JsonlLedger(root / "data" / "ledger.jsonl")
             ledger.add([balance_record_from_row(balance_row())])
             csv_path = root / "data" / "balances.csv"
-            export_balances_csv(csv_path, ledger.records("balance"))
+            export_balances_csv(
+                csv_path, ledger.records("balance"), ledger_path=ledger.path
+            )
             original_bytes = csv_path.read_bytes()
             args = build_parser().parse_args(
                 ["aq", "balances", "--root", str(root), "--date", "2026-09-02"]
@@ -797,7 +1106,9 @@ class LedgerCliTests(unittest.TestCase):
             ledger = JsonlLedger(root / "data" / "ledger.jsonl")
             ledger.add([balance_record_from_row(balance_row())])
             csv_path = root / "data" / "balances.csv"
-            export_balances_csv(csv_path, ledger.records("balance"))
+            export_balances_csv(
+                csv_path, ledger.records("balance"), ledger_path=ledger.path
+            )
             original_bytes = csv_path.read_bytes()
             args = build_parser().parse_args(
                 ["aq", "balances", "--root", str(root), "--date", "2026-09-02"]
@@ -866,11 +1177,9 @@ class LedgerCliTests(unittest.TestCase):
             csv_path.write_bytes(original_bytes)
             args = build_parser().parse_args(["ledger", "export", "--root", str(root)])
 
-            with mock.patch("personal_finance_agent.cli.export_balances_csv") as export:
-                with self.assertRaisesRegex(ValueError, "existing CSV"):
-                    cmd_ledger_export(args)
+            with self.assertRaisesRegex(ValueError, "existing CSV"):
+                cmd_ledger_export(args)
 
-            export.assert_not_called()
             self.assertEqual(csv_path.read_bytes(), original_bytes)
 
     def test_aq_balances_reports_malformed_sibling_and_imports_valid_row(self):
@@ -1006,7 +1315,7 @@ class LedgerCliTests(unittest.TestCase):
             )
             actual_export = export_balances_csv
 
-            def assert_locked(csv_path, records):
+            def assert_locked(csv_path, records, *, ledger_path):
                 process_context = multiprocessing.get_context("fork")
                 results = process_context.Queue()
                 process = process_context.Process(
@@ -1018,7 +1327,7 @@ class LedgerCliTests(unittest.TestCase):
                 self.assertFalse(process.is_alive())
                 self.assertEqual(process.exitcode, 0)
                 self.assertFalse(results.get(timeout=5))
-                return actual_export(csv_path, records)
+                return actual_export(csv_path, records, ledger_path=ledger_path)
 
             with mock.patch("personal_finance_agent.cli.base", return_value=["synthetic-tool"]), mock.patch(
                 "personal_finance_agent.cli.run_with_optional_pinfile", return_value=0
@@ -1036,7 +1345,7 @@ class LedgerCliTests(unittest.TestCase):
             args = build_parser().parse_args(["ledger", "export", "--root", str(root)])
             actual_export = export_balances_csv
 
-            def assert_locked(csv_path, records):
+            def assert_locked(csv_path, records, *, ledger_path):
                 process_context = multiprocessing.get_context("fork")
                 results = process_context.Queue()
                 process = process_context.Process(
@@ -1048,7 +1357,7 @@ class LedgerCliTests(unittest.TestCase):
                 self.assertFalse(process.is_alive())
                 self.assertEqual(process.exitcode, 0)
                 self.assertFalse(results.get(timeout=5))
-                return actual_export(csv_path, records)
+                return actual_export(csv_path, records, ledger_path=ledger_path)
 
             with mock.patch(
                 "personal_finance_agent.cli.export_balances_csv", side_effect=assert_locked
@@ -1073,6 +1382,9 @@ class LedgerCliTests(unittest.TestCase):
                 exported = list(csv.DictReader(handle))
             self.assertEqual(len(exported), 1)
             self.assertEqual(exported[0]["balance"], "123.45 EUR")
+            self.assertTrue(
+                exported[0]["ledger_export_id"].startswith("mentat-ledger-export-v1:")
+            )
 
     def test_cli_export_neutralizes_every_formula_prefix(self):
         with tempfile.TemporaryDirectory() as tmp:

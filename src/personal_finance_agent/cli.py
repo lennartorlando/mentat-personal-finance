@@ -27,6 +27,7 @@ from .ledger import (
     LedgerValidationError,
     balance_record_from_row,
     export_balances_csv,
+    reject_unsafe_csv_overwrite,
 )
 from .security import validate_fints_pin
 
@@ -100,9 +101,13 @@ def cmd_aq_balances(args: argparse.Namespace) -> int:
         "Ledger",
     )
     _reject_same_ledger_and_csv_path(ledger_path, csv_path)
-    _reject_csv_history_without_ledger_history(
-        csv_path, JsonlLedger(ledger_path).records("balance")
-    )
+    if csv_path.exists():
+        if not JsonlLedger(ledger_path).records("balance"):
+            raise ValueError(
+                "Refusing to overwrite an existing CSV without corresponding ledger history; "
+                "move the CSV or restore the ledger before exporting."
+            )
+        reject_unsafe_csv_overwrite(csv_path, ledger_path)
     request_command = base(ctx, "aqbanking-cli", args.aqbanking_cli) + [
         "request",
         "--balance",
@@ -146,7 +151,7 @@ def cmd_aq_balances(args: argparse.Namespace) -> int:
         balances = [
             record for record in result.records if isinstance(record, BalanceRecord)
         ]
-        exported = export_balances_csv(csv_path, balances)
+        exported = export_balances_csv(csv_path, balances, ledger_path=ledger_path)
     print(
         f"Ledger import: {result.added} added, {result.updated} updated, "
         f"{result.duplicates} duplicate(s); "
@@ -184,33 +189,45 @@ def cmd_ledger_export(args: argparse.Namespace) -> int:
     _reject_same_ledger_and_csv_path(ledger_path, csv_path)
     with JsonlLedger(ledger_path).locked() as session:
         balances = session.records("balance")
-        _reject_csv_history_without_ledger_history(csv_path, balances)
-        exported = export_balances_csv(csv_path, balances)
+        exported = export_balances_csv(csv_path, balances, ledger_path=ledger_path)
     print(f"Exported {exported} balance row(s) from {ledger_path} to {csv_path}.")
     return 0
 
 
 def _reject_same_ledger_and_csv_path(ledger_path: Path, csv_path: Path) -> None:
-    ledger_key = os.path.normcase(os.fspath(ledger_path)).casefold()
-    csv_key = os.path.normcase(os.fspath(csv_path)).casefold()
-    if ledger_key == csv_key:
+    if ledger_path == csv_path:
         raise ValueError("Ledger and CSV export paths must refer to different files.")
     try:
         same_existing_file = ledger_path.samefile(csv_path)
     except FileNotFoundError:
-        return
+        same_existing_file = False
     if same_existing_file:
         raise ValueError("Ledger and CSV export paths must refer to different files.")
-
-
-def _reject_csv_history_without_ledger_history(
-    csv_path: Path, balance_records: list[object]
-) -> None:
-    if csv_path.exists() and not balance_records:
+    ledger_key = os.path.normcase(os.fspath(ledger_path)).casefold()
+    csv_key = os.path.normcase(os.fspath(csv_path)).casefold()
+    if ledger_key == csv_key and (
+        _filesystem_is_case_insensitive(ledger_path)
+        or _filesystem_is_case_insensitive(csv_path)
+    ):
         raise ValueError(
-            "Refusing to overwrite an existing CSV without corresponding ledger history; "
-            "move the CSV or migrate it before exporting."
+            "Ledger and CSV export paths must refer to different files."
         )
+
+
+def _filesystem_is_case_insensitive(path: Path) -> bool:
+    if os.name == "nt":
+        return True
+    for ancestor in path.parents:
+        if not ancestor.exists() or not ancestor.name:
+            continue
+        case_variant = ancestor.with_name(ancestor.name.swapcase())
+        if case_variant == ancestor:
+            continue
+        try:
+            return ancestor.samefile(case_variant)
+        except FileNotFoundError:
+            return False
+    return False
 
 
 def _print_diagnostics(diagnostics: list[Diagnostic]) -> None:

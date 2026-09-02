@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import errno
 import os
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
+
+if os.name == "posix":
+    import fcntl
+elif os.name == "nt":
+    import msvcrt
 
 
 PRIVATE_DIR_MODE = 0o700
@@ -43,5 +50,34 @@ def fsync_parent_directory(path: Path) -> None:
         except OSError as exc:
             if exc.errno not in _UNSUPPORTED_DIRECTORY_FSYNC_ERRNOS:
                 raise
+    finally:
+        os.close(descriptor)
+
+
+@contextmanager
+def private_file_lock(lock_path: Path) -> Iterator[None]:
+    """Hold an exclusive advisory lock in a private, durable lock file."""
+    ensure_private_dir(lock_path.parent)
+    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, PRIVATE_FILE_MODE)
+    try:
+        ensure_private_file(lock_path)
+        if os.name == "posix":
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        elif os.name == "nt":
+            if os.fstat(descriptor).st_size == 0:
+                os.write(descriptor, b"\0")
+                os.fsync(descriptor)
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
+        else:
+            raise OSError(f"File locking is unsupported on platform {os.name!r}")
+        try:
+            yield
+        finally:
+            if os.name == "posix":
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            elif os.name == "nt":
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
     finally:
         os.close(descriptor)

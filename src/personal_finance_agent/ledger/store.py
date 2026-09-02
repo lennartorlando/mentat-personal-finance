@@ -7,20 +7,22 @@ also makes cross-type identity checks and atomic rewrites a single operation.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import secrets
 import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Iterator
 
-if os.name == "posix":
-    import fcntl
-elif os.name == "nt":
-    import msvcrt
-
-from ..private_files import ensure_private_dir, ensure_private_file, fsync_parent_directory
+from ..private_files import (
+    ensure_private_dir,
+    ensure_private_file,
+    fsync_parent_directory,
+    private_file_lock,
+)
 from .models import (
     BalanceRecord,
     Diagnostic,
@@ -91,6 +93,7 @@ class JsonlLedger:
             return session.replace_transaction_slice(records, provenance)
 
     def _replace_records(self, records: Iterable[LedgerRecord]) -> None:
+        lineage_id = _valid_ledger_lineage(self.path)
         descriptor, temporary_name = tempfile.mkstemp(
             dir=self.path.parent,
             prefix=f".{self.path.name}.",
@@ -114,6 +117,7 @@ class JsonlLedger:
             os.replace(temporary_path, self.path)
             ensure_private_file(self.path)
             fsync_parent_directory(self.path)
+            _write_ledger_lineage(self.path, lineage_id or secrets.token_hex(32))
         finally:
             temporary_path.unlink(missing_ok=True)
 
@@ -217,6 +221,17 @@ class _LockedLedger:
                             new_value=record.amount,
                         )
                     )
+                if existing.provenance.source_ref != record.provenance.source_ref:
+                    diagnostics.append(
+                        Diagnostic(
+                            record.provenance.source_ref,
+                            "provenance.source_ref",
+                            "record provenance changed",
+                            record_id=record.id,
+                            previous_value=existing.provenance.source_ref,
+                            new_value=record.provenance.source_ref,
+                        )
+                    )
             else:
                 duplicates += 1
 
@@ -248,29 +263,95 @@ def _same_record_content(left: LedgerRecord, right: LedgerRecord) -> bool:
     return left_value == right_value
 
 
+_LINEAGE_VERSION = 1
+
+
+def ledger_lineage_id(ledger_path: Path) -> str:
+    """Return the durable identity of this ledger incarnation."""
+    lineage_id = _valid_ledger_lineage(ledger_path)
+    if lineage_id is not None:
+        return lineage_id
+    lineage_id = secrets.token_hex(32)
+    _write_ledger_lineage(ledger_path, lineage_id)
+    return lineage_id
+
+
+def _lineage_path(ledger_path: Path) -> Path:
+    ledger_path = ledger_path.resolve(strict=False)
+    return ledger_path.with_name(f".{ledger_path.name}.lineage")
+
+
+def _ledger_fingerprint(ledger_path: Path) -> dict[str, object] | None:
+    try:
+        with ledger_path.open("rb") as handle:
+            file_stat = os.fstat(handle.fileno())
+            digest = hashlib.sha256()
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+            final_stat = os.fstat(handle.fileno())
+    except FileNotFoundError:
+        return None
+    if (file_stat.st_dev, file_stat.st_ino, file_stat.st_size) != (
+        final_stat.st_dev,
+        final_stat.st_ino,
+        final_stat.st_size,
+    ):
+        raise OSError("Ledger changed while its lineage was being read")
+    return {
+        "device": final_stat.st_dev,
+        "inode": final_stat.st_ino,
+        "sha256": digest.hexdigest(),
+        "size": final_stat.st_size,
+    }
+
+
+def _valid_ledger_lineage(ledger_path: Path) -> str | None:
+    lineage_path = _lineage_path(ledger_path)
+    try:
+        ensure_private_file(lineage_path)
+        value = json.loads(lineage_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, dict) or value.get("version") != _LINEAGE_VERSION:
+        return None
+    lineage_id = value.get("lineage_id")
+    if not isinstance(lineage_id, str) or not lineage_id:
+        return None
+    if value.get("ledger") != _ledger_fingerprint(ledger_path):
+        return None
+    return lineage_id
+
+
+def _write_ledger_lineage(ledger_path: Path, lineage_id: str) -> None:
+    lineage_path = _lineage_path(ledger_path)
+    ensure_private_dir(lineage_path.parent)
+    value = {
+        "version": _LINEAGE_VERSION,
+        "lineage_id": lineage_id,
+        "ledger": _ledger_fingerprint(ledger_path),
+    }
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=lineage_path.parent,
+        prefix=f".{lineage_path.name}.",
+        suffix=".tmp",
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump(value, handle, sort_keys=True, separators=(",", ":"))
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        ensure_private_file(temporary_path)
+        os.replace(temporary_path, lineage_path)
+        ensure_private_file(lineage_path)
+        fsync_parent_directory(lineage_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
 @contextmanager
 def _writer_lock(ledger_path: Path) -> Iterator[None]:
     lock_path = ledger_path.with_name(f".{ledger_path.name}.lock")
-    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
-    try:
-        ensure_private_file(lock_path)
-        if os.name == "posix":
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
-        elif os.name == "nt":
-            if os.fstat(descriptor).st_size == 0:
-                os.write(descriptor, b"\0")
-                os.fsync(descriptor)
-            os.lseek(descriptor, 0, os.SEEK_SET)
-            msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
-        else:
-            raise OSError(f"Writer locking is unsupported on platform {os.name!r}")
-        try:
-            yield
-        finally:
-            if os.name == "posix":
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
-            elif os.name == "nt":
-                os.lseek(descriptor, 0, os.SEEK_SET)
-                msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
-    finally:
-        os.close(descriptor)
+    with private_file_lock(lock_path):
+        yield
