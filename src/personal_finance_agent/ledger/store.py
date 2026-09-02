@@ -20,8 +20,16 @@ if os.name == "posix":
 elif os.name == "nt":
     import msvcrt
 
-from ..private_files import ensure_private_dir, ensure_private_file
-from .models import BalanceRecord, LedgerRecord, record_from_dict
+from ..private_files import ensure_private_dir, ensure_private_file, fsync_parent_directory
+from .models import (
+    BalanceRecord,
+    Diagnostic,
+    LedgerRecord,
+    Provenance,
+    TransactionRecord,
+    canonical_balance_record,
+    record_from_dict,
+)
 
 
 @dataclass(frozen=True)
@@ -30,6 +38,8 @@ class AddResult:
     duplicates: int
     records: tuple[LedgerRecord, ...]
     updated: int = 0
+    removed: int = 0
+    diagnostics: tuple[Diagnostic, ...] = ()
 
 
 class JsonlLedger:
@@ -72,6 +82,14 @@ class JsonlLedger:
         with self.locked() as session:
             return session.add(records)
 
+    def replace_transaction_slice(
+        self,
+        records: Iterable[TransactionRecord],
+        provenance: Provenance,
+    ) -> AddResult:
+        with self.locked() as session:
+            return session.replace_transaction_slice(records, provenance)
+
     def _replace_records(self, records: Iterable[LedgerRecord]) -> None:
         descriptor, temporary_name = tempfile.mkstemp(
             dir=self.path.parent,
@@ -95,6 +113,7 @@ class JsonlLedger:
             ensure_private_file(temporary_path)
             os.replace(temporary_path, self.path)
             ensure_private_file(self.path)
+            fsync_parent_directory(self.path)
         finally:
             temporary_path.unlink(missing_ok=True)
 
@@ -109,13 +128,69 @@ class _LockedLedger:
         return self._ledger.records(record_type)
 
     def add(self, records: Iterable[LedgerRecord]) -> AddResult:
+        return self._merge(records)
+
+    def replace_transaction_slice(
+        self,
+        records: Iterable[TransactionRecord],
+        provenance: Provenance,
+    ) -> AddResult:
+        source_slice = (provenance.source, provenance.source_ref)
+        incoming_records = list(records)
+        for record in incoming_records:
+            if not isinstance(record, TransactionRecord):
+                raise TypeError("transaction slices may contain only transaction records")
+            if (record.provenance.source, record.provenance.source_ref) != source_slice:
+                raise ValueError("transaction record provenance does not match the source slice")
+        return self._merge(incoming_records, transaction_slice=source_slice)
+
+    def _merge(
+        self,
+        records: Iterable[LedgerRecord],
+        *,
+        transaction_slice: tuple[str, str] | None = None,
+    ) -> AddResult:
+        incoming_records = [record_from_dict(record.to_dict()) for record in records]
         existing_records = self.records()
-        combined_records = list(existing_records)
+        canonical_existing_records = [
+            canonical_balance_record(record) if isinstance(record, BalanceRecord) else record
+            for record in existing_records
+        ]
+        migrated = canonical_existing_records != existing_records
+        existing_records = canonical_existing_records
+        if transaction_slice is not None:
+            existing_by_id = {record.id: record for record in existing_records}
+            for record in incoming_records:
+                if not isinstance(record, TransactionRecord):
+                    continue
+                existing = existing_by_id.get(record.id)
+                if (
+                    isinstance(existing, TransactionRecord)
+                    and (existing.provenance.source, existing.provenance.source_ref)
+                    != transaction_slice
+                ):
+                    raise ValueError(
+                        "transaction identity already belongs to a different source slice"
+                    )
+        incoming_transaction_ids = {
+            record.id for record in incoming_records if isinstance(record, TransactionRecord)
+        }
+        combined_records = [
+            record
+            for record in existing_records
+            if not (
+                isinstance(record, TransactionRecord)
+                and (record.provenance.source, record.provenance.source_ref) == transaction_slice
+                and record.id not in incoming_transaction_ids
+            )
+        ]
+        removed = len(existing_records) - len(combined_records)
         positions = {record.id: index for index, record in enumerate(combined_records)}
         added = 0
         duplicates = 0
         updated = 0
-        for record in records:
+        diagnostics: list[Diagnostic] = []
+        for record in incoming_records:
             position = positions.get(record.id)
             if position is None:
                 positions[record.id] = len(combined_records)
@@ -124,21 +199,33 @@ class _LockedLedger:
                 continue
 
             existing = combined_records[position]
-            if (
-                isinstance(existing, BalanceRecord)
-                and isinstance(record, BalanceRecord)
-                and not _same_balance_content(existing, record)
-            ):
+            if not _same_record_content(existing, record):
                 combined_records[position] = record
                 updated += 1
+                if (
+                    isinstance(existing, BalanceRecord)
+                    and isinstance(record, BalanceRecord)
+                    and existing.amount != record.amount
+                ):
+                    diagnostics.append(
+                        Diagnostic(
+                            record.provenance.source_ref,
+                            "amount",
+                            "balance amount changed",
+                            record_id=record.id,
+                            previous_value=existing.amount,
+                            new_value=record.amount,
+                        )
+                    )
             else:
                 duplicates += 1
 
-        if not added and not updated:
+        if not added and not updated and not removed and not migrated:
             return AddResult(
                 added=0,
                 duplicates=duplicates,
                 records=tuple(existing_records),
+                diagnostics=tuple(diagnostics),
             )
 
         self._ledger._replace_records(combined_records)
@@ -147,10 +234,12 @@ class _LockedLedger:
             duplicates=duplicates,
             records=tuple(combined_records),
             updated=updated,
+            removed=removed,
+            diagnostics=tuple(diagnostics),
         )
 
 
-def _same_balance_content(left: BalanceRecord, right: BalanceRecord) -> bool:
+def _same_record_content(left: LedgerRecord, right: LedgerRecord) -> bool:
     """Compare persisted meaning while ignoring fetch-time provenance only."""
     left_value = left.to_dict()
     right_value = right.to_dict()

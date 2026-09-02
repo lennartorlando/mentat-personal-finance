@@ -223,18 +223,26 @@ def resolve_runtime_path(
 
 
 @dataclass(frozen=True)
+class ParsedBalanceRow:
+    values: dict[str, str]
+    line: int
+
+
+@dataclass(frozen=True)
 class BalanceParseResult:
     """The accepted rows and rejected-field diagnostics from one parser run."""
 
-    rows: tuple[dict[str, str], ...]
+    rows: tuple[ParsedBalanceRow, ...]
     diagnostics: tuple[Diagnostic, ...]
 
 
 def parse_balance_output(output: str, snapshot_date: str) -> BalanceParseResult:
-    rows: list[dict[str, str]] = []
+    rows: list[ParsedBalanceRow] = []
     diagnostics: list[Diagnostic] = []
     field_names = ("balance_date", "balance", "iban", "bank_code", "account_number")
     for line_number, line in enumerate(output.splitlines(), start=1):
+        if not line.strip():
+            continue
         parts = line.split("\t")
         if len(parts) != 5:
             if len(parts) < len(field_names):
@@ -254,7 +262,7 @@ def parse_balance_output(output: str, snapshot_date: str) -> BalanceParseResult:
             continue
         balance_date, value, iban, bank_code, account_number = parts
         rows.append(
-            {
+            ParsedBalanceRow({
                 "date": snapshot_date,
                 "source": "AqBanking",
                 "balance_date": balance_date,
@@ -263,7 +271,7 @@ def parse_balance_output(output: str, snapshot_date: str) -> BalanceParseResult:
                 "bank_code": bank_code,
                 "account_number": account_number,
                 "exported_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-            }
+            }, line_number)
         )
     return BalanceParseResult(tuple(rows), tuple(diagnostics))
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -19,7 +20,14 @@ from .aqbanking import (
     run_interactive,
     run_with_optional_pinfile,
 )
-from .ledger import JsonlLedger, LedgerValidationError, balance_record_from_row, export_balances_csv
+from .ledger import (
+    BalanceRecord,
+    Diagnostic,
+    JsonlLedger,
+    LedgerValidationError,
+    balance_record_from_row,
+    export_balances_csv,
+)
 from .security import validate_fints_pin
 
 
@@ -92,6 +100,9 @@ def cmd_aq_balances(args: argparse.Namespace) -> int:
         "Ledger",
     )
     _reject_same_ledger_and_csv_path(ledger_path, csv_path)
+    _reject_csv_history_without_ledger_history(
+        csv_path, JsonlLedger(ledger_path).records("balance")
+    )
     request_command = base(ctx, "aqbanking-cli", args.aqbanking_cli) + [
         "request",
         "--balance",
@@ -113,23 +124,35 @@ def cmd_aq_balances(args: argparse.Namespace) -> int:
     parsed = parse_balance_output(output, args.date)
     diagnostics = list(parsed.diagnostics)
     records = []
-    for row in parsed.rows:
+    for parsed_row in parsed.rows:
         try:
-            records.append(balance_record_from_row(row))
+            records.append(
+                balance_record_from_row(parsed_row.values, line=parsed_row.line)
+            )
         except LedgerValidationError as exc:
             diagnostics.extend(exc.diagnostics)
+
+    if not records:
+        if not diagnostics:
+            diagnostics.append(
+                Diagnostic("aqbanking:listbal", "record", "no valid balance records were returned")
+            )
+        _print_diagnostics(diagnostics)
+        return 2
 
     ledger = JsonlLedger(ledger_path)
     with ledger.locked() as session:
         result = session.add(records)
-        exported = export_balances_csv(csv_path, session.records("balance"))
+        balances = [
+            record for record in result.records if isinstance(record, BalanceRecord)
+        ]
+        exported = export_balances_csv(csv_path, balances)
     print(
         f"Ledger import: {result.added} added, {result.updated} updated, "
         f"{result.duplicates} duplicate(s); "
         f"exported {exported} balance row(s) to {csv_path}."
     )
-    for diagnostic in diagnostics:
-        print(json.dumps({"diagnostic": diagnostic.to_dict()}, sort_keys=True), file=sys.stderr)
+    _print_diagnostics(diagnostics + list(result.diagnostics))
     return 2 if diagnostics else 0
 
 
@@ -160,14 +183,39 @@ def cmd_ledger_export(args: argparse.Namespace) -> int:
     )
     _reject_same_ledger_and_csv_path(ledger_path, csv_path)
     with JsonlLedger(ledger_path).locked() as session:
-        exported = export_balances_csv(csv_path, session.records("balance"))
+        balances = session.records("balance")
+        _reject_csv_history_without_ledger_history(csv_path, balances)
+        exported = export_balances_csv(csv_path, balances)
     print(f"Exported {exported} balance row(s) from {ledger_path} to {csv_path}.")
     return 0
 
 
 def _reject_same_ledger_and_csv_path(ledger_path: Path, csv_path: Path) -> None:
-    if ledger_path == csv_path:
+    ledger_key = os.path.normcase(os.fspath(ledger_path)).casefold()
+    csv_key = os.path.normcase(os.fspath(csv_path)).casefold()
+    if ledger_key == csv_key:
         raise ValueError("Ledger and CSV export paths must refer to different files.")
+    try:
+        same_existing_file = ledger_path.samefile(csv_path)
+    except FileNotFoundError:
+        return
+    if same_existing_file:
+        raise ValueError("Ledger and CSV export paths must refer to different files.")
+
+
+def _reject_csv_history_without_ledger_history(
+    csv_path: Path, balance_records: list[object]
+) -> None:
+    if csv_path.exists() and not balance_records:
+        raise ValueError(
+            "Refusing to overwrite an existing CSV without corresponding ledger history; "
+            "move the CSV or migrate it before exporting."
+        )
+
+
+def _print_diagnostics(diagnostics: list[Diagnostic]) -> None:
+    for diagnostic in diagnostics:
+        print(json.dumps({"diagnostic": diagnostic.to_dict()}, sort_keys=True), file=sys.stderr)
 
 
 def add_root(parser: argparse.ArgumentParser) -> None:

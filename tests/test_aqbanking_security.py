@@ -1,4 +1,3 @@
-import csv
 import os
 import stat
 import tempfile
@@ -134,34 +133,6 @@ class RuntimePathTests(unittest.TestCase):
 
 
 class CsvSafetyTests(unittest.TestCase):
-    def test_append_csv_neutralizes_formula_prefixes(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "balances.csv"
-            rows = [
-                {
-                    "date": "2026-07-02",
-                    "source": "AqBanking",
-                    "balance_date": "2026-07-02",
-                    "balance": "=cmd",
-                    "iban": "+danger",
-                    "bank_code": "-danger",
-                    "account_number": "@danger",
-                    "exported_at": "\tdanger",
-                }
-            ]
-
-            with mock.patch("builtins.print"):
-                append_csv(path, rows)
-
-            with path.open(newline="", encoding="utf-8") as handle:
-                written = next(csv.DictReader(handle))
-
-            self.assertEqual(written["balance"], "'=cmd")
-            self.assertEqual(written["iban"], "'+danger")
-            self.assertEqual(written["bank_code"], "'-danger")
-            self.assertEqual(written["account_number"], "'@danger")
-            self.assertEqual(written["exported_at"], "'\tdanger")
-
     @unittest.skipUnless(os.name == "posix", "POSIX permissions only")
     def test_append_csv_creates_private_file(self):
         with tempfile.TemporaryDirectory() as tmp:

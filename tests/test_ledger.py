@@ -14,6 +14,7 @@ from unittest import mock
 from personal_finance_agent.aqbanking import parse_balance_output
 from personal_finance_agent.cli import build_parser, cmd_aq_balances, cmd_ledger_export, cmd_ledger_inspect
 from personal_finance_agent.ledger import (
+    HoldingRecord,
     JsonlLedger,
     LedgerValidationError,
     Provenance,
@@ -23,6 +24,8 @@ from personal_finance_agent.ledger import (
     holding_record,
     transaction_records,
 )
+from personal_finance_agent.ledger.models import stable_id
+from personal_finance_agent.private_files import fsync_parent_directory
 
 if os.name == "posix":
     import fcntl
@@ -68,6 +71,16 @@ def balance_row() -> dict[str, str]:
     }
 
 
+def formula_prefix_balance_records():
+    records = []
+    for day, prefix in enumerate(("=", "+", "-", "@", "\t", "\r"), start=1):
+        row = balance_row()
+        row["balance_date"] = f"2026-09-{day:02d}"
+        row["balance"] = f"{prefix}danger"
+        records.append(balance_record_from_row(row))
+    return records
+
+
 class LedgerRecordTests(unittest.TestCase):
     def test_aqbanking_balance_becomes_record_with_source_provenance(self):
         record = balance_record_from_row(balance_row())
@@ -102,6 +115,16 @@ class LedgerRecordTests(unittest.TestCase):
         self.assertNotEqual(first[0].id, first[1].id)
         self.assertEqual(first[0].normalized_purpose, "morning coffee")
         self.assertEqual(first[0].purpose, "Morning   Coffee")
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = JsonlLedger(Path(tmp) / "ledger.jsonl")
+            first_result = ledger.add(first)
+            replay_result = ledger.add(repeated)
+
+            self.assertEqual((first_result.added, replay_result.duplicates), (2, 2))
+            self.assertEqual(
+                [record.id for record in ledger.records("transaction")],
+                [record.id for record in first],
+            )
 
     def test_transaction_identifiers_do_not_depend_on_distinct_row_order(self):
         provenance = Provenance("synthetic-csv", IMPORTED_AT, "fixture.csv")
@@ -184,6 +207,30 @@ class LedgerRecordTests(unittest.TestCase):
             self.assertEqual(stored[0].id, original.id)
             self.assertEqual(stored[0].amount, "145.67 EUR")
 
+    def test_changed_balance_amount_returns_structured_diagnostic(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = JsonlLedger(Path(tmp) / "ledger.jsonl")
+            original = balance_record_from_row(balance_row())
+            corrected_row = balance_row()
+            corrected_row["balance"] = "145.67 EUR"
+            corrected = balance_record_from_row(corrected_row)
+            ledger.add([original])
+
+            result = ledger.add([corrected])
+
+            self.assertEqual(len(result.diagnostics), 1)
+            self.assertEqual(
+                result.diagnostics[0].to_dict(),
+                {
+                    "input": "aqbanking:listbal",
+                    "field": "amount",
+                    "message": "balance amount changed",
+                    "record_id": original.id,
+                    "previous_value": "123.45 EUR",
+                    "new_value": "145.67 EUR",
+                },
+            )
+
     def test_imported_at_only_change_is_duplicate_and_leaves_jsonl_byte_identical(self):
         with tempfile.TemporaryDirectory() as tmp:
             ledger = JsonlLedger(Path(tmp) / "ledger.jsonl")
@@ -215,6 +262,19 @@ class LedgerRecordTests(unittest.TestCase):
             with csv_path.open(newline="", encoding="utf-8") as handle:
                 self.assertEqual(next(csv.DictReader(handle))["account_number"], "synthetic-account")
 
+    def test_balance_export_neutralizes_every_formula_prefix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = Path(tmp) / "balances.csv"
+
+            export_balances_csv(csv_path, formula_prefix_balance_records())
+
+            with csv_path.open(newline="", encoding="utf-8") as handle:
+                balances = [row["balance"] for row in csv.DictReader(handle)]
+            self.assertEqual(
+                balances,
+                ["'=danger", "'+danger", "'-danger", "'@danger", "'\tdanger", "'\rdanger"],
+            )
+
     def test_account_and_holding_constructors_round_trip_through_jsonl(self):
         provenance = Provenance("synthetic", IMPORTED_AT, "fixture")
         account = account_record("brokerage-1", provenance, name="Brokerage", currency="EUR")
@@ -227,6 +287,218 @@ class LedgerRecordTests(unittest.TestCase):
             self.assertEqual(ledger.records(), [account, holding])
             self.assertEqual(ledger.records("account"), [account])
             self.assertEqual(ledger.records("holding"), [holding])
+
+    def test_account_and_holding_payload_changes_update_existing_ids(self):
+        provenance = Provenance("synthetic", IMPORTED_AT, "fixture")
+        later = Provenance(
+            "synthetic",
+            datetime(2026, 9, 2, 9, 30, tzinfo=timezone.utc),
+            "fixture",
+        )
+        account = account_record("brokerage-1", provenance, name="Old name", currency="EUR")
+        renamed = account_record("brokerage-1", later, name="New name", currency="EUR")
+        holding = holding_record(account.id, "2026-09-02", "DE000TEST", "3.5", provenance)
+        requantified = holding_record(account.id, "2026-09-02", "DE000TEST", "9.0", later)
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = JsonlLedger(Path(tmp) / "ledger.jsonl")
+            ledger.add([account, holding])
+
+            result = ledger.add([renamed, requantified])
+
+            self.assertEqual((result.added, result.updated, result.duplicates), (0, 2, 0))
+            self.assertEqual(ledger.records("account")[0].name, "New name")
+            self.assertEqual(ledger.records("holding")[0].quantity, "9.0")
+
+    def test_account_id_joins_balance_using_same_source_account_id(self):
+        row = balance_row()
+        row["iban"] = "DE00SYNTHETIC"
+        row["bank_code"] = ""
+        row["account_number"] = ""
+        balance = balance_record_from_row(row)
+        account = account_record(
+            row["iban"],
+            Provenance("AqBanking", IMPORTED_AT, "aqbanking:listaccs"),
+        )
+
+        self.assertEqual(account.id, balance.account_id)
+
+    def test_legacy_balance_identity_is_readable_and_migrates_before_update(self):
+        for identifier_kind in ("fallback", "iban"):
+            with self.subTest(identifier_kind=identifier_kind):
+                row = balance_row()
+                if identifier_kind == "iban":
+                    row.update(iban="DE00SYNTHETIC", bank_code="", account_number="")
+                    legacy_account_id = stable_id(
+                        "acct", row["source"], "iban", row["iban"]
+                    )
+                else:
+                    legacy_account_id = stable_id(
+                        "acct",
+                        row["source"],
+                        "bank_code",
+                        row["bank_code"],
+                        "account_number",
+                        row["account_number"],
+                    )
+                legacy = balance_record_from_row(row).to_dict()
+                legacy["account_id"] = legacy_account_id
+                legacy["id"] = stable_id(
+                    "bal", row["source"], legacy_account_id, "2026-09-02"
+                )
+                corrected_row = dict(row)
+                corrected_row["balance"] = "145.67 EUR"
+                corrected = balance_record_from_row(corrected_row)
+
+                with tempfile.TemporaryDirectory() as tmp:
+                    ledger = JsonlLedger(Path(tmp) / "ledger.jsonl")
+                    ledger.path.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
+
+                    self.assertEqual(ledger.records("balance")[0].id, legacy["id"])
+                    result = ledger.add([corrected])
+
+                    self.assertEqual((result.added, result.updated), (0, 1))
+                    self.assertEqual(ledger.records("balance"), [corrected])
+
+    def test_reimported_complete_transaction_slice_retires_superseded_records(self):
+        original_provenance = Provenance("synthetic-csv", IMPORTED_AT, "fixture.csv")
+        amended_provenance = Provenance(
+            "synthetic-csv",
+            datetime(2026, 9, 2, 9, 30, tzinfo=timezone.utc),
+            "fixture.csv",
+        )
+        original = transaction_records(
+            [{
+                "account_id": "acct_synthetic",
+                "booking_date": "2026-09-01",
+                "amount": "-10.00 EUR",
+                "purpose": "Original purpose",
+            }],
+            original_provenance,
+            complete_source_slice=True,
+        )
+        amended = transaction_records(
+            [{
+                "account_id": "acct_synthetic",
+                "booking_date": "2026-09-01",
+                "amount": "-10.00 EUR",
+                "purpose": "Amended purpose",
+            }],
+            amended_provenance,
+            complete_source_slice=True,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = JsonlLedger(Path(tmp) / "ledger.jsonl")
+            ledger.add(original)
+
+            result = ledger.replace_transaction_slice(amended, amended_provenance)
+
+            self.assertEqual((result.added, result.removed), (1, 1))
+            self.assertEqual(ledger.records("transaction"), amended)
+
+    def test_transaction_slice_rejects_cross_source_ref_identity_collision(self):
+        first_provenance = Provenance("synthetic-csv", IMPORTED_AT, "first.csv")
+        second_provenance = Provenance("synthetic-csv", IMPORTED_AT, "second.csv")
+        rows = [{
+            "account_id": "acct_synthetic",
+            "booking_date": "2026-09-01",
+            "amount": "-10.00 EUR",
+            "purpose": "Overlapping transaction",
+        }]
+        first = transaction_records(rows, first_provenance, complete_source_slice=True)
+        second = transaction_records(rows, second_provenance, complete_source_slice=True)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = JsonlLedger(Path(tmp) / "ledger.jsonl")
+            ledger.replace_transaction_slice(first, first_provenance)
+            original_bytes = ledger.path.read_bytes()
+
+            with self.assertRaisesRegex(ValueError, "different source slice"):
+                ledger.replace_transaction_slice(second, second_provenance)
+
+            self.assertEqual(ledger.path.read_bytes(), original_bytes)
+            self.assertEqual(ledger.records("transaction"), first)
+
+    def test_empty_transaction_slice_retires_only_matching_source_records(self):
+        first_provenance = Provenance("synthetic-csv", IMPORTED_AT, "first.csv")
+        second_provenance = Provenance("synthetic-csv", IMPORTED_AT, "second.csv")
+        first = transaction_records(
+            [{
+                "account_id": "acct_synthetic",
+                "booking_date": "2026-09-01",
+                "amount": "-10.00 EUR",
+                "purpose": "First source",
+            }],
+            first_provenance,
+            complete_source_slice=True,
+        )
+        second = transaction_records(
+            [{
+                "account_id": "acct_synthetic",
+                "booking_date": "2026-09-01",
+                "amount": "-20.00 EUR",
+                "purpose": "Second source",
+            }],
+            second_provenance,
+            complete_source_slice=True,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = JsonlLedger(Path(tmp) / "ledger.jsonl")
+            ledger.add(first + second)
+
+            result = ledger.replace_transaction_slice([], first_provenance)
+
+            self.assertEqual(result.removed, 1)
+            self.assertEqual(ledger.records("transaction"), second)
+
+    def test_generic_transaction_add_does_not_imply_complete_slice(self):
+        provenance = Provenance("synthetic-csv", IMPORTED_AT, "fixture.csv")
+        records = transaction_records(
+            [
+                {
+                    "account_id": "acct_synthetic",
+                    "booking_date": "2026-09-01",
+                    "amount": "-10.00 EUR",
+                    "purpose": purpose,
+                }
+                for purpose in ("First", "Second")
+            ],
+            provenance,
+            complete_source_slice=True,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = JsonlLedger(Path(tmp) / "ledger.jsonl")
+            ledger.add(records)
+
+            ledger.add([records[0]])
+
+            self.assertEqual(ledger.records("transaction"), records)
+
+    def test_holding_constructor_rejects_empty_as_of_before_persisting(self):
+        provenance = Provenance("synthetic", IMPORTED_AT, "fixture")
+
+        with self.assertRaises(LedgerValidationError) as raised:
+            holding_record("acct_synthetic", "", "DE000TEST", "3.5", provenance)
+
+        self.assertEqual([item.field for item in raised.exception.diagnostics], ["as_of"])
+
+    def test_store_rejects_record_that_would_fail_on_read(self):
+        provenance = Provenance("synthetic", IMPORTED_AT, "fixture")
+        invalid = HoldingRecord(
+            id="hold_invalid",
+            account_id="acct_synthetic",
+            as_of="",
+            asset="DE000TEST",
+            quantity="3.5",
+            provenance=provenance,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = JsonlLedger(Path(tmp) / "ledger.jsonl")
+
+            with self.assertRaises(ValueError):
+                ledger.add([invalid])
+
+            self.assertFalse(ledger.path.exists())
 
     def test_jsonl_rejects_malformed_and_forged_records_with_line_number(self):
         provenance = Provenance("synthetic", IMPORTED_AT, "fixture")
@@ -309,6 +581,20 @@ class LedgerRecordTests(unittest.TestCase):
             self.assertEqual([record.id for record in ledger.records()], [first.id])
             self.assertEqual(list(root.glob(".ledger.jsonl.*.tmp")), [])
 
+    @unittest.skipUnless(os.name == "posix", "directory fsync is POSIX-specific")
+    def test_ledger_replace_fsyncs_file_and_parent_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = JsonlLedger(Path(tmp) / "ledger.jsonl")
+
+            with mock.patch(
+                "personal_finance_agent.ledger.store.fsync_parent_directory",
+                wraps=fsync_parent_directory,
+            ) as fsync_parent:
+                ledger.add([balance_record_from_row(balance_row())])
+
+            fsync_parent.assert_called_once_with(ledger.path)
+            self.assertTrue(ledger.path.exists())
+
     def test_failed_csv_replace_preserves_existing_export_and_removes_temporary_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -325,6 +611,20 @@ class LedgerRecordTests(unittest.TestCase):
 
             self.assertEqual(csv_path.read_bytes(), original_bytes)
             self.assertEqual(list(root.glob(".balances.csv.*.tmp")), [])
+
+    @unittest.skipUnless(os.name == "posix", "directory fsync is POSIX-specific")
+    def test_csv_replace_fsyncs_file_and_parent_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = Path(tmp) / "balances.csv"
+
+            with mock.patch(
+                "personal_finance_agent.ledger.export.fsync_parent_directory",
+                wraps=fsync_parent_directory,
+            ) as fsync_parent:
+                export_balances_csv(csv_path, [balance_record_from_row(balance_row())])
+
+            fsync_parent.assert_called_once_with(csv_path)
+            self.assertTrue(csv_path.exists())
 
     @unittest.skipUnless(os.name == "posix", "requires POSIX permission bits")
     def test_csv_export_keeps_directory_and_file_private(self):
@@ -389,6 +689,15 @@ class LedgerRecordTests(unittest.TestCase):
         self.assertEqual(parsed.diagnostics[0].input_name, "aqbanking:listbal")
         self.assertEqual(parsed.diagnostics[0].line, 1)
 
+    def test_balance_parser_ignores_trailing_blank_lines(self):
+        parsed = parse_balance_output(
+            "02.09.2026\t123.45 EUR\t\tsynthetic-bank\tsynthetic-account\n\n",
+            "2026-09-02",
+        )
+
+        self.assertEqual(len(parsed.rows), 1)
+        self.assertEqual(parsed.diagnostics, ())
+
 
 class LedgerCliTests(unittest.TestCase):
     def test_aq_balances_rejects_aliased_ledger_and_csv_path_before_request(self):
@@ -415,6 +724,99 @@ class LedgerCliTests(unittest.TestCase):
             request.assert_not_called()
             self.assertFalse((root / "data" / "shared.data").exists())
 
+    def test_aq_balances_rejects_case_variant_ledger_and_csv_paths_before_request(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args = build_parser().parse_args([
+                "aq",
+                "balances",
+                "--root",
+                str(root),
+                "--ledger",
+                "ledger.jsonl",
+                "--csv",
+                "Ledger.jsonl",
+            ])
+
+            with mock.patch("personal_finance_agent.cli.base") as command, mock.patch(
+                "personal_finance_agent.cli.run_with_optional_pinfile"
+            ) as request:
+                with self.assertRaisesRegex(ValueError, "different files"):
+                    cmd_aq_balances(args)
+
+            command.assert_not_called()
+            request.assert_not_called()
+
+    def test_aq_balances_refuses_to_overwrite_csv_history_without_ledger_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            csv_path = root / "data" / "balances.csv"
+            csv_path.parent.mkdir(parents=True)
+            original_bytes = (
+                b"date,source,balance_date,balance,iban,bank_code,account_number,exported_at\n"
+                b"2026-07-01,AqBanking,2026-07-01,10.00 EUR,,bank,account,2026-07-01T10:00:00+00:00\n"
+                b"2026-08-01,AqBanking,2026-08-01,20.00 EUR,,bank,account,2026-08-01T10:00:00+00:00\n"
+            )
+            csv_path.write_bytes(original_bytes)
+            args = build_parser().parse_args(["aq", "balances", "--root", str(root)])
+
+            with mock.patch("personal_finance_agent.cli.base") as command, mock.patch(
+                "personal_finance_agent.cli.run_with_optional_pinfile"
+            ) as request:
+                with self.assertRaisesRegex(ValueError, "existing CSV"):
+                    cmd_aq_balances(args)
+
+            command.assert_not_called()
+            request.assert_not_called()
+            self.assertEqual(csv_path.read_bytes(), original_bytes)
+
+    def test_aq_balances_empty_input_preserves_existing_csv_and_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ledger = JsonlLedger(root / "data" / "ledger.jsonl")
+            ledger.add([balance_record_from_row(balance_row())])
+            csv_path = root / "data" / "balances.csv"
+            export_balances_csv(csv_path, ledger.records("balance"))
+            original_bytes = csv_path.read_bytes()
+            args = build_parser().parse_args(
+                ["aq", "balances", "--root", str(root), "--date", "2026-09-02"]
+            )
+            errors = io.StringIO()
+
+            with mock.patch("personal_finance_agent.cli.base", return_value=["synthetic-tool"]), mock.patch(
+                "personal_finance_agent.cli.run_with_optional_pinfile", return_value=0
+            ), mock.patch("personal_finance_agent.cli.run_capture", return_value=""), redirect_stderr(errors):
+                self.assertEqual(cmd_aq_balances(args), 2)
+
+            self.assertIn("no valid balance records", errors.getvalue())
+            self.assertEqual(csv_path.read_bytes(), original_bytes)
+
+    def test_aq_balances_fully_rejected_input_preserves_existing_csv(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ledger = JsonlLedger(root / "data" / "ledger.jsonl")
+            ledger.add([balance_record_from_row(balance_row())])
+            csv_path = root / "data" / "balances.csv"
+            export_balances_csv(csv_path, ledger.records("balance"))
+            original_bytes = csv_path.read_bytes()
+            args = build_parser().parse_args(
+                ["aq", "balances", "--root", str(root), "--date", "2026-09-02"]
+            )
+
+            with mock.patch("personal_finance_agent.cli.base", return_value=["synthetic-tool"]), mock.patch(
+                "personal_finance_agent.cli.run_with_optional_pinfile", return_value=0
+            ), mock.patch(
+                "personal_finance_agent.cli.run_capture",
+                return_value="02.09.2026\t99.00 EUR\tsynthetic-account\n",
+            ), mock.patch(
+                "personal_finance_agent.cli.export_balances_csv",
+                wraps=export_balances_csv,
+            ) as export, redirect_stderr(io.StringIO()):
+                self.assertEqual(cmd_aq_balances(args), 2)
+
+            export.assert_not_called()
+            self.assertEqual(csv_path.read_bytes(), original_bytes)
+
     def test_ledger_export_rejects_aliased_ledger_and_csv_path_before_export(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -435,6 +837,41 @@ class LedgerCliTests(unittest.TestCase):
 
             export.assert_not_called()
             self.assertFalse((root / "data" / "shared.data").exists())
+
+    @unittest.skipUnless(hasattr(os, "link"), "hard links are unsupported")
+    def test_ledger_export_rejects_hardlinked_ledger_and_csv_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_dir = root / "data"
+            data_dir.mkdir()
+            ledger_path = data_dir / "ledger.jsonl"
+            csv_path = data_dir / "balances.csv"
+            ledger_path.write_text("synthetic ledger placeholder\n", encoding="utf-8")
+            os.link(ledger_path, csv_path)
+            args = build_parser().parse_args(["ledger", "export", "--root", str(root)])
+
+            with mock.patch("personal_finance_agent.cli.export_balances_csv") as export:
+                with self.assertRaisesRegex(ValueError, "different files"):
+                    cmd_ledger_export(args)
+
+            export.assert_not_called()
+            self.assertEqual(ledger_path.read_bytes(), csv_path.read_bytes())
+
+    def test_ledger_export_refuses_existing_csv_without_ledger_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            csv_path = root / "data" / "balances.csv"
+            csv_path.parent.mkdir(parents=True)
+            original_bytes = b"legacy,balance,history\n"
+            csv_path.write_bytes(original_bytes)
+            args = build_parser().parse_args(["ledger", "export", "--root", str(root)])
+
+            with mock.patch("personal_finance_agent.cli.export_balances_csv") as export:
+                with self.assertRaisesRegex(ValueError, "existing CSV"):
+                    cmd_ledger_export(args)
+
+            export.assert_not_called()
+            self.assertEqual(csv_path.read_bytes(), original_bytes)
 
     def test_aq_balances_reports_malformed_sibling_and_imports_valid_row(self):
         output = (
@@ -484,8 +921,9 @@ class LedgerCliTests(unittest.TestCase):
             self.assertEqual(records[0].amount, "-123.45 EUR")
 
             with (root / "data" / "balances.csv").open(newline="", encoding="utf-8") as handle:
-                exported = next(csv.DictReader(handle))
-            self.assertEqual(exported["balance"], "'-123.45 EUR")
+                exported = list(csv.DictReader(handle))
+            self.assertEqual(len(exported), 1)
+            self.assertEqual(exported[0]["balance"], "'-123.45 EUR")
 
     def test_aq_balances_summary_reports_updated_records(self):
         original = "02.09.2026\t123.45 EUR\t\tsynthetic-bank\tsynthetic-account\n"
@@ -501,7 +939,7 @@ class LedgerCliTests(unittest.TestCase):
                 "personal_finance_agent.cli.run_with_optional_pinfile", return_value=0
             ), mock.patch(
                 "personal_finance_agent.cli.run_capture", side_effect=[original, corrected]
-            ), redirect_stdout(output):
+            ), redirect_stdout(output), redirect_stderr(io.StringIO()):
                 self.assertEqual(cmd_aq_balances(args), 0)
                 self.assertEqual(cmd_aq_balances(args), 0)
 
@@ -509,6 +947,53 @@ class LedgerCliTests(unittest.TestCase):
                 "Ledger import: 0 added, 1 updated, 0 duplicate(s)",
                 output.getvalue(),
             )
+
+    def test_aq_balances_reports_balance_amount_change_as_diagnostic(self):
+        original = "02.09.2026\t123.45 EUR\t\tsynthetic-bank\tsynthetic-account\n"
+        corrected = "02.09.2026\t145.67 EUR\t\tsynthetic-bank\tsynthetic-account\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args = build_parser().parse_args(
+                ["aq", "balances", "--root", str(root), "--date", "2026-09-02"]
+            )
+            errors = io.StringIO()
+
+            with mock.patch("personal_finance_agent.cli.base", return_value=["synthetic-tool"]), mock.patch(
+                "personal_finance_agent.cli.run_with_optional_pinfile", return_value=0
+            ), mock.patch(
+                "personal_finance_agent.cli.run_capture", side_effect=[original, corrected]
+            ), redirect_stdout(io.StringIO()), redirect_stderr(errors):
+                self.assertEqual(cmd_aq_balances(args), 0)
+                self.assertEqual(cmd_aq_balances(args), 0)
+
+            diagnostic = json.loads(errors.getvalue().splitlines()[-1])["diagnostic"]
+            self.assertEqual(diagnostic["field"], "amount")
+            self.assertEqual(diagnostic["previous_value"], "123.45 EUR")
+            self.assertEqual(diagnostic["new_value"], "145.67 EUR")
+            self.assertTrue(diagnostic["record_id"].startswith("bal_"))
+
+    def test_semantic_balance_diagnostic_includes_source_line(self):
+        output = (
+            "02.09.2026\t123.45 EUR\t\tsynthetic-bank\tsynthetic-account\n"
+            "31.02.2026\t99.00 EUR\t\tsynthetic-bank\tsynthetic-account\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args = build_parser().parse_args(
+                ["aq", "balances", "--root", str(root), "--date", "2026-09-02"]
+            )
+            errors = io.StringIO()
+
+            with mock.patch("personal_finance_agent.cli.base", return_value=["synthetic-tool"]), mock.patch(
+                "personal_finance_agent.cli.run_with_optional_pinfile", return_value=0
+            ), mock.patch("personal_finance_agent.cli.run_capture", return_value=output), redirect_stdout(
+                io.StringIO()
+            ), redirect_stderr(errors):
+                self.assertEqual(cmd_aq_balances(args), 2)
+
+            diagnostics = [json.loads(line)["diagnostic"] for line in errors.getvalue().splitlines()]
+            self.assertEqual(diagnostics[-1]["field"], "balance_date")
+            self.assertEqual(diagnostics[-1]["line"], 2)
 
     @unittest.skipUnless(os.name == "posix", "requires POSIX advisory file locking")
     def test_aq_balances_holds_ledger_lock_through_csv_publication(self):
@@ -588,6 +1073,23 @@ class LedgerCliTests(unittest.TestCase):
                 exported = list(csv.DictReader(handle))
             self.assertEqual(len(exported), 1)
             self.assertEqual(exported[0]["balance"], "123.45 EUR")
+
+    def test_cli_export_neutralizes_every_formula_prefix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ledger = JsonlLedger(root / "data" / "ledger.jsonl")
+            ledger.add(formula_prefix_balance_records())
+            args = build_parser().parse_args(["ledger", "export", "--root", str(root)])
+
+            with mock.patch("builtins.print"):
+                self.assertEqual(cmd_ledger_export(args), 0)
+
+            with (root / "data" / "balances.csv").open(newline="", encoding="utf-8") as handle:
+                balances = [row["balance"] for row in csv.DictReader(handle)]
+            self.assertEqual(
+                balances,
+                ["'=danger", "'+danger", "'-danger", "'@danger", "'\tdanger", "'\rdanger"],
+            )
 
     def test_cli_inspection_emits_machine_readable_json(self):
         with tempfile.TemporaryDirectory() as tmp:

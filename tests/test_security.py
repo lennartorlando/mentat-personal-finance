@@ -33,10 +33,10 @@ class BalanceParserTests(unittest.TestCase):
         result = parse_balance_output(output, "2026-07-02")
 
         self.assertEqual(len(result.rows), 1)
-        self.assertEqual(result.rows[0]["date"], "2026-07-02")
-        self.assertEqual(result.rows[0]["source"], "AqBanking")
-        self.assertEqual(result.rows[0]["balance"], "123.45 EUR")
-        self.assertEqual(result.rows[0]["iban"], "DE001234")
+        self.assertEqual(result.rows[0].values["date"], "2026-07-02")
+        self.assertEqual(result.rows[0].values["source"], "AqBanking")
+        self.assertEqual(result.rows[0].values["balance"], "123.45 EUR")
+        self.assertEqual(result.rows[0].values["iban"], "DE001234")
         self.assertEqual(result.diagnostics, ())
 
 

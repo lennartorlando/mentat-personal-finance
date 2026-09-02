@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 from typing import Iterable
 
-from ..private_files import ensure_private_dir, ensure_private_file
+from ..private_files import ensure_private_dir, ensure_private_file, fsync_parent_directory
 from .models import BalanceRecord
 
 
@@ -55,6 +55,7 @@ def export_balances_csv(path: Path, records: Iterable[BalanceRecord]) -> int:
             os.fsync(handle.fileno())
         ensure_private_file(temporary_path)
         os.replace(temporary_path, path)
+        fsync_parent_directory(path)
         return count
     finally:
         temporary_path.unlink(missing_ok=True)

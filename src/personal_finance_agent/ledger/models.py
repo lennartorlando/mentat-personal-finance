@@ -16,6 +16,9 @@ class Diagnostic:
     field: str
     message: str
     line: int | None = None
+    record_id: str | None = None
+    previous_value: str | None = None
+    new_value: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         value: dict[str, Any] = {
@@ -25,6 +28,12 @@ class Diagnostic:
         }
         if self.line is not None:
             value["line"] = self.line
+        if self.record_id is not None:
+            value["record_id"] = self.record_id
+        if self.previous_value is not None:
+            value["previous_value"] = self.previous_value
+        if self.new_value is not None:
+            value["new_value"] = self.new_value
         return value
 
 
@@ -183,7 +192,7 @@ def account_record(
 ) -> AccountRecord:
     _require(source_account_id, "source_account_id", provenance.source_ref)
     return AccountRecord(
-        id=stable_id("acct", provenance.source, "source_account_id", source_account_id),
+        id=_account_id(provenance.source, source_account_id),
         source_account_id=source_account_id,
         name=name,
         currency=currency,
@@ -191,11 +200,16 @@ def account_record(
     )
 
 
-def balance_record_from_row(row: Mapping[str, str], *, input_name: str = "aqbanking:listbal") -> BalanceRecord:
+def balance_record_from_row(
+    row: Mapping[str, str],
+    *,
+    input_name: str = "aqbanking:listbal",
+    line: int | None = None,
+) -> BalanceRecord:
     diagnostics: list[Diagnostic] = []
     for field in ("date", "source", "balance_date", "balance", "exported_at"):
         if not row.get(field, "").strip():
-            diagnostics.append(Diagnostic(input_name, field, "is required"))
+            diagnostics.append(Diagnostic(input_name, field, "is required", line))
 
     identifiers = {
         "iban": row.get("iban", "").strip(),
@@ -206,27 +220,19 @@ def balance_record_from_row(row: Mapping[str, str], *, input_name: str = "aqbank
         for field in ("bank_code", "account_number"):
             if not identifiers[field]:
                 diagnostics.append(
-                    Diagnostic(input_name, field, "is required when IBAN is not provided")
+                    Diagnostic(input_name, field, "is required when IBAN is not provided", line)
                 )
 
-    balance_date = _validated_date(row.get("balance_date", ""), "balance_date", input_name, diagnostics)
-    snapshot_date = _validated_date(row.get("date", ""), "date", input_name, diagnostics)
-    imported_at = _validated_datetime(row.get("exported_at", ""), "exported_at", input_name, diagnostics)
+    balance_date = _validated_date(row.get("balance_date", ""), "balance_date", input_name, diagnostics, line)
+    snapshot_date = _validated_date(row.get("date", ""), "date", input_name, diagnostics, line)
+    imported_at = _validated_datetime(
+        row.get("exported_at", ""), "exported_at", input_name, diagnostics, line
+    )
     if diagnostics:
         raise LedgerValidationError(diagnostics)
 
     provenance = Provenance(row["source"], imported_at, input_name)
-    if identifiers["iban"]:
-        account_id = stable_id("acct", provenance.source, "iban", identifiers["iban"])
-    else:
-        account_id = stable_id(
-            "acct",
-            provenance.source,
-            "bank_code",
-            identifiers["bank_code"],
-            "account_number",
-            identifiers["account_number"],
-        )
+    account_id = _account_id(provenance.source, _balance_source_account_id(identifiers))
     return BalanceRecord(
         id=stable_id("bal", provenance.source, account_id, balance_date),
         account_id=account_id,
@@ -304,7 +310,12 @@ def holding_record(
 ) -> HoldingRecord:
     source_name = provenance.source_ref
     diagnostics: list[Diagnostic] = []
-    for field, value in (("account_id", account_id), ("asset", asset), ("quantity", quantity)):
+    for field, value in (
+        ("account_id", account_id),
+        ("as_of", as_of),
+        ("asset", asset),
+        ("quantity", quantity),
+    ):
         if not value.strip():
             diagnostics.append(Diagnostic(source_name, field, "is required"))
     normalized_date = _validated_date(as_of, "as_of", source_name, diagnostics)
@@ -335,7 +346,7 @@ def record_from_dict(value: object) -> LedgerRecord:
         )
         _verify_id(
             record.id,
-            stable_id("acct", provenance.source, "source_account_id", source_account_id),
+            _account_id(provenance.source, source_account_id),
             "account",
         )
         return record
@@ -350,25 +361,17 @@ def record_from_dict(value: object) -> LedgerRecord:
         identifiers = dict(identifiers_value)
         for field in ("iban", "bank_code", "account_number"):
             _string(identifiers, field, "balance.account_identifiers", allow_empty=True)
-        if identifiers["iban"]:
-            expected_account_id = stable_id(
-                "acct", provenance.source, "iban", identifiers["iban"]
-            )
-        else:
+        if not identifiers["iban"]:
             if not identifiers["bank_code"] or not identifiers["account_number"]:
                 raise ValueError(
                     "balance.account_identifiers requires bank_code and account_number when IBAN is empty"
                 )
-            expected_account_id = stable_id(
-                "acct",
-                provenance.source,
-                "bank_code",
-                identifiers["bank_code"],
-                "account_number",
-                identifiers["account_number"],
-            )
+        expected_account_id = _account_id(
+            provenance.source, _balance_source_account_id(identifiers)
+        )
+        legacy_account_id = _legacy_balance_account_id(provenance.source, identifiers)
         account_id = _string(value, "account_id", "balance")
-        if account_id != expected_account_id:
+        if account_id not in (expected_account_id, legacy_account_id):
             raise ValueError("balance.account_id does not match its account identifiers")
         balance_date = _canonical_date(value, "balance_date", "balance")
         record = BalanceRecord(
@@ -500,6 +503,46 @@ def _verify_id(actual: str, expected: str, record_type: str) -> None:
         raise ValueError(f"{record_type}.id does not match its derived identity")
 
 
+def _account_id(source: str, source_account_id: str) -> str:
+    return stable_id("acct", source, "source_account_id", source_account_id)
+
+
+def _balance_source_account_id(identifiers: Mapping[str, str]) -> str:
+    return identifiers["iban"] or f"{identifiers['bank_code']}:{identifiers['account_number']}"
+
+
+def _legacy_balance_account_id(source: str, identifiers: Mapping[str, str]) -> str:
+    if identifiers["iban"]:
+        return stable_id("acct", source, "iban", identifiers["iban"])
+    return stable_id(
+        "acct",
+        source,
+        "bank_code",
+        identifiers["bank_code"],
+        "account_number",
+        identifiers["account_number"],
+    )
+
+
+def canonical_balance_record(record: BalanceRecord) -> BalanceRecord:
+    """Return a balance using the current account identity without changing its content."""
+    account_id = _account_id(
+        record.provenance.source,
+        _balance_source_account_id(record.account_identifiers),
+    )
+    if record.account_id == account_id:
+        return record
+    return BalanceRecord(
+        id=stable_id("bal", record.provenance.source, account_id, record.balance_date),
+        account_id=account_id,
+        balance_date=record.balance_date,
+        snapshot_date=record.snapshot_date,
+        amount=record.amount,
+        account_identifiers=record.account_identifiers,
+        provenance=record.provenance,
+    )
+
+
 def _require(value: str, field: str, input_name: str) -> None:
     if not value.strip():
         raise LedgerValidationError([Diagnostic(input_name, field, "is required")])
@@ -528,13 +571,14 @@ def _validated_datetime(
     field: str,
     input_name: str,
     diagnostics: list[Diagnostic],
+    line: int | None = None,
 ) -> dt.datetime:
     if not value:
         return dt.datetime.min.replace(tzinfo=dt.timezone.utc)
     try:
         return _parse_datetime(value, field)
     except ValueError:
-        diagnostics.append(Diagnostic(input_name, field, "must be an ISO-8601 timestamp"))
+        diagnostics.append(Diagnostic(input_name, field, "must be an ISO-8601 timestamp", line))
         return dt.datetime.min.replace(tzinfo=dt.timezone.utc)
 
 
