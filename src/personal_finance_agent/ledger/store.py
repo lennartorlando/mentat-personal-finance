@@ -1,4 +1,9 @@
-"""Private, append-only JSONL storage for normalized ledger records."""
+"""Private JSONL storage for normalized ledger records.
+
+All record types intentionally share one hand-inspectable file. Each line is a
+self-contained record with a ``record_type`` discriminator; keeping one stream
+also makes cross-type identity checks and atomic rewrites a single operation.
+"""
 
 from __future__ import annotations
 
@@ -16,7 +21,7 @@ elif os.name == "nt":
     import msvcrt
 
 from ..private_files import ensure_private_dir, ensure_private_file
-from .models import LedgerRecord, record_from_dict
+from .models import BalanceRecord, LedgerRecord, record_from_dict
 
 
 @dataclass(frozen=True)
@@ -24,6 +29,7 @@ class AddResult:
     added: int
     duplicates: int
     records: tuple[LedgerRecord, ...]
+    updated: int = 0
 
 
 class JsonlLedger:
@@ -50,30 +56,21 @@ class JsonlLedger:
                     records.append(record)
         return records
 
-    def add(self, records: Iterable[LedgerRecord]) -> AddResult:
+    @contextmanager
+    def locked(self) -> Iterator[_LockedLedger]:
+        """Coordinate a ledger operation and any publication derived from it.
+
+        The yielded session exposes lock-aware ``add`` and ``records`` methods.
+        Callers that publish a derived artifact should do so before leaving this
+        context, ensuring the artifact reflects the latest serialized ledger.
+        """
         ensure_private_dir(self.path.parent)
         with _writer_lock(self.path):
-            existing_records = self.records()
-            existing_ids = {record.id for record in existing_records}
-            new_records: list[LedgerRecord] = []
-            duplicates = 0
-            for record in records:
-                if record.id in existing_ids:
-                    duplicates += 1
-                    continue
-                existing_ids.add(record.id)
-                new_records.append(record)
+            yield _LockedLedger(self)
 
-            if not new_records:
-                return AddResult(added=0, duplicates=duplicates, records=tuple(existing_records))
-
-            combined_records = [*existing_records, *new_records]
-            self._replace_records(combined_records)
-            return AddResult(
-                added=len(new_records),
-                duplicates=duplicates,
-                records=tuple(combined_records),
-            )
+    def add(self, records: Iterable[LedgerRecord]) -> AddResult:
+        with self.locked() as session:
+            return session.add(records)
 
     def _replace_records(self, records: Iterable[LedgerRecord]) -> None:
         descriptor, temporary_name = tempfile.mkstemp(
@@ -100,6 +97,66 @@ class JsonlLedger:
             ensure_private_file(self.path)
         finally:
             temporary_path.unlink(missing_ok=True)
+
+
+class _LockedLedger:
+    """Ledger operations performed under one already-acquired writer lock."""
+
+    def __init__(self, ledger: JsonlLedger):
+        self._ledger = ledger
+
+    def records(self, record_type: str | None = None) -> list[LedgerRecord]:
+        return self._ledger.records(record_type)
+
+    def add(self, records: Iterable[LedgerRecord]) -> AddResult:
+        existing_records = self.records()
+        combined_records = list(existing_records)
+        positions = {record.id: index for index, record in enumerate(combined_records)}
+        added = 0
+        duplicates = 0
+        updated = 0
+        for record in records:
+            position = positions.get(record.id)
+            if position is None:
+                positions[record.id] = len(combined_records)
+                combined_records.append(record)
+                added += 1
+                continue
+
+            existing = combined_records[position]
+            if (
+                isinstance(existing, BalanceRecord)
+                and isinstance(record, BalanceRecord)
+                and not _same_balance_content(existing, record)
+            ):
+                combined_records[position] = record
+                updated += 1
+            else:
+                duplicates += 1
+
+        if not added and not updated:
+            return AddResult(
+                added=0,
+                duplicates=duplicates,
+                records=tuple(existing_records),
+            )
+
+        self._ledger._replace_records(combined_records)
+        return AddResult(
+            added=added,
+            duplicates=duplicates,
+            records=tuple(combined_records),
+            updated=updated,
+        )
+
+
+def _same_balance_content(left: BalanceRecord, right: BalanceRecord) -> bool:
+    """Compare persisted meaning while ignoring fetch-time provenance only."""
+    left_value = left.to_dict()
+    right_value = right.to_dict()
+    left_value["provenance"].pop("imported_at")
+    right_value["provenance"].pop("imported_at")
+    return left_value == right_value
 
 
 @contextmanager

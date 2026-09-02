@@ -30,13 +30,14 @@ class SecurityTests(unittest.TestCase):
 class BalanceParserTests(unittest.TestCase):
     def test_parse_balance_output(self):
         output = "02.07.2026\t123.45 EUR\tDE001234\t12345678\t987654321\n"
-        rows = parse_balance_output(output, "2026-07-02")
+        result = parse_balance_output(output, "2026-07-02")
 
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["date"], "2026-07-02")
-        self.assertEqual(rows[0]["source"], "AqBanking")
-        self.assertEqual(rows[0]["balance"], "123.45 EUR")
-        self.assertEqual(rows[0]["iban"], "DE001234")
+        self.assertEqual(len(result.rows), 1)
+        self.assertEqual(result.rows[0]["date"], "2026-07-02")
+        self.assertEqual(result.rows[0]["source"], "AqBanking")
+        self.assertEqual(result.rows[0]["balance"], "123.45 EUR")
+        self.assertEqual(result.rows[0]["iban"], "DE001234")
+        self.assertEqual(result.diagnostics, ())
 
 
 if __name__ == "__main__":

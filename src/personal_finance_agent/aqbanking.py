@@ -222,12 +222,12 @@ def resolve_runtime_path(
     return resolved
 
 
-class BalanceParseResult(list[dict[str, str]]):
-    """Parsed rows with diagnostics while retaining the legacy list contract."""
+@dataclass(frozen=True)
+class BalanceParseResult:
+    """The accepted rows and rejected-field diagnostics from one parser run."""
 
-    def __init__(self, rows: list[dict[str, str]], diagnostics: list[Diagnostic]):
-        super().__init__(rows)
-        self.diagnostics = tuple(diagnostics)
+    rows: tuple[dict[str, str], ...]
+    diagnostics: tuple[Diagnostic, ...]
 
 
 def parse_balance_output(output: str, snapshot_date: str) -> BalanceParseResult:
@@ -265,7 +265,7 @@ def parse_balance_output(output: str, snapshot_date: str) -> BalanceParseResult:
                 "exported_at": dt.datetime.now(dt.timezone.utc).isoformat(),
             }
         )
-    return BalanceParseResult(rows, diagnostics)
+    return BalanceParseResult(tuple(rows), tuple(diagnostics))
 
 
 def append_csv(path: Path, rows: list[dict[str, str]]) -> None:

@@ -6,6 +6,7 @@ import datetime as dt
 import hashlib
 import json
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Iterable, Mapping, Union
 
 
@@ -48,10 +49,14 @@ class Provenance:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "Provenance":
+        value = _mapping(value, "provenance")
         return cls(
-            source=str(value["source"]),
-            imported_at=_parse_datetime(str(value["imported_at"]), "provenance.imported_at"),
-            source_ref=str(value["source_ref"]),
+            source=_string(value, "source", "provenance"),
+            imported_at=_parse_datetime(
+                _string(value, "imported_at", "provenance"),
+                "provenance.imported_at",
+            ),
+            source_ref=_string(value, "source_ref", "provenance"),
         )
 
 
@@ -82,9 +87,18 @@ class BalanceRecord:
     balance_date: str
     snapshot_date: str
     amount: str
-    account_identifiers: dict[str, str]
+    account_identifiers: Mapping[str, str]
     provenance: Provenance
     record_type: str = "balance"
+
+    def __post_init__(self) -> None:
+        # Copy before wrapping so callers cannot retain an alias that mutates a
+        # frozen record's identity after its IDs have been derived.
+        object.__setattr__(
+            self,
+            "account_identifiers",
+            MappingProxyType(dict(self.account_identifiers)),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -306,52 +320,184 @@ def holding_record(
     )
 
 
-def record_from_dict(value: Mapping[str, Any]) -> LedgerRecord:
-    record_type = value.get("record_type")
-    provenance = Provenance.from_dict(value["provenance"])
+def record_from_dict(value: object) -> LedgerRecord:
+    value = _mapping(value, "ledger record")
+    record_type = _string(value, "record_type", "ledger record")
+    provenance = Provenance.from_dict(_required(value, "provenance", "ledger record"))
     if record_type == "account":
-        return AccountRecord(
-            id=str(value["id"]),
-            source_account_id=str(value["source_account_id"]),
-            name=_optional_string(value.get("name")),
-            currency=_optional_string(value.get("currency")),
+        source_account_id = _string(value, "source_account_id", "account")
+        record = AccountRecord(
+            id=_string(value, "id", "account"),
+            source_account_id=source_account_id,
+            name=_optional_string(value.get("name"), "account.name"),
+            currency=_optional_string(value.get("currency"), "account.currency"),
             provenance=provenance,
         )
+        _verify_id(
+            record.id,
+            stable_id("acct", provenance.source, "source_account_id", source_account_id),
+            "account",
+        )
+        return record
     if record_type == "balance":
-        return BalanceRecord(
-            id=str(value["id"]),
-            account_id=str(value["account_id"]),
-            balance_date=str(value["balance_date"]),
-            snapshot_date=str(value["snapshot_date"]),
-            amount=str(value["amount"]),
-            account_identifiers={str(key): str(item) for key, item in value["account_identifiers"].items()},
+        identifiers_value = _mapping(
+            _required(value, "account_identifiers", "balance"),
+            "balance.account_identifiers",
+        )
+        for key, item in identifiers_value.items():
+            if not isinstance(key, str) or not isinstance(item, str):
+                raise ValueError("balance.account_identifiers keys and values must be strings")
+        identifiers = dict(identifiers_value)
+        for field in ("iban", "bank_code", "account_number"):
+            _string(identifiers, field, "balance.account_identifiers", allow_empty=True)
+        if identifiers["iban"]:
+            expected_account_id = stable_id(
+                "acct", provenance.source, "iban", identifiers["iban"]
+            )
+        else:
+            if not identifiers["bank_code"] or not identifiers["account_number"]:
+                raise ValueError(
+                    "balance.account_identifiers requires bank_code and account_number when IBAN is empty"
+                )
+            expected_account_id = stable_id(
+                "acct",
+                provenance.source,
+                "bank_code",
+                identifiers["bank_code"],
+                "account_number",
+                identifiers["account_number"],
+            )
+        account_id = _string(value, "account_id", "balance")
+        if account_id != expected_account_id:
+            raise ValueError("balance.account_id does not match its account identifiers")
+        balance_date = _canonical_date(value, "balance_date", "balance")
+        record = BalanceRecord(
+            id=_string(value, "id", "balance"),
+            account_id=account_id,
+            balance_date=balance_date,
+            snapshot_date=_canonical_date(value, "snapshot_date", "balance"),
+            amount=_string(value, "amount", "balance"),
+            account_identifiers=identifiers,
             provenance=provenance,
         )
+        _verify_id(
+            record.id,
+            stable_id("bal", provenance.source, account_id, balance_date),
+            "balance",
+        )
+        return record
     if record_type == "transaction":
-        return TransactionRecord(
-            id=str(value["id"]),
-            account_id=str(value["account_id"]),
-            booking_date=str(value["booking_date"]),
-            amount=str(value["amount"]),
-            purpose=str(value["purpose"]),
-            normalized_purpose=str(value["normalized_purpose"]),
-            ordinal=int(value["ordinal"]),
+        account_id = _string(value, "account_id", "transaction")
+        booking_date = _canonical_date(value, "booking_date", "transaction")
+        amount = _string(value, "amount", "transaction")
+        purpose = _string(value, "purpose", "transaction")
+        normalized_purpose = _string(value, "normalized_purpose", "transaction")
+        if normalized_purpose != normalize_purpose(purpose):
+            raise ValueError("transaction.normalized_purpose does not match purpose")
+        ordinal = _integer(value, "ordinal", "transaction")
+        if ordinal < 0:
+            raise ValueError("transaction.ordinal must be nonnegative")
+        record = TransactionRecord(
+            id=_string(value, "id", "transaction"),
+            account_id=account_id,
+            booking_date=booking_date,
+            amount=amount,
+            purpose=purpose,
+            normalized_purpose=normalized_purpose,
+            ordinal=ordinal,
             provenance=provenance,
         )
+        _verify_id(
+            record.id,
+            stable_id(
+                "txn",
+                provenance.source,
+                account_id,
+                booking_date,
+                amount,
+                normalized_purpose,
+                ordinal,
+            ),
+            "transaction",
+        )
+        return record
     if record_type == "holding":
-        return HoldingRecord(
-            id=str(value["id"]),
-            account_id=str(value["account_id"]),
-            as_of=str(value["as_of"]),
-            asset=str(value["asset"]),
-            quantity=str(value["quantity"]),
+        account_id = _string(value, "account_id", "holding")
+        as_of = _canonical_date(value, "as_of", "holding")
+        asset = _string(value, "asset", "holding")
+        record = HoldingRecord(
+            id=_string(value, "id", "holding"),
+            account_id=account_id,
+            as_of=as_of,
+            asset=asset,
+            quantity=_string(value, "quantity", "holding"),
             provenance=provenance,
         )
+        _verify_id(
+            record.id,
+            stable_id("hold", provenance.source, account_id, as_of, asset),
+            "holding",
+        )
+        return record
     raise ValueError(f"Unknown ledger record type: {record_type!r}")
 
 
-def _optional_string(value: Any) -> str | None:
-    return None if value is None else str(value)
+def _mapping(value: object, field: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field} must be an object")
+    return value
+
+
+def _required(value: Mapping[str, Any], field: str, parent: str) -> Any:
+    if field not in value:
+        raise ValueError(f"{parent}.{field} is required")
+    return value[field]
+
+
+def _string(
+    value: Mapping[str, Any],
+    field: str,
+    parent: str,
+    *,
+    allow_empty: bool = False,
+) -> str:
+    item = _required(value, field, parent)
+    if not isinstance(item, str):
+        raise ValueError(f"{parent}.{field} must be a string")
+    if not allow_empty and not item.strip():
+        raise ValueError(f"{parent}.{field} is required")
+    return item
+
+
+def _integer(value: Mapping[str, Any], field: str, parent: str) -> int:
+    item = _required(value, field, parent)
+    if isinstance(item, bool) or not isinstance(item, int):
+        raise ValueError(f"{parent}.{field} must be an integer")
+    return item
+
+
+def _optional_string(value: Any, field: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be a string or null")
+    return value
+
+
+def _canonical_date(value: Mapping[str, Any], field: str, parent: str) -> str:
+    item = _string(value, field, parent)
+    try:
+        parsed = dt.date.fromisoformat(item)
+    except ValueError as exc:
+        raise ValueError(f"{parent}.{field} must be YYYY-MM-DD") from exc
+    if parsed.isoformat() != item:
+        raise ValueError(f"{parent}.{field} must be YYYY-MM-DD")
+    return item
+
+
+def _verify_id(actual: str, expected: str, record_type: str) -> None:
+    if actual != expected:
+        raise ValueError(f"{record_type}.id does not match its derived identity")
 
 
 def _require(value: str, field: str, input_name: str) -> None:

@@ -91,6 +91,7 @@ def cmd_aq_balances(args: argparse.Namespace) -> int:
         args.allow_outside_runtime,
         "Ledger",
     )
+    _reject_same_ledger_and_csv_path(ledger_path, csv_path)
     request_command = base(ctx, "aqbanking-cli", args.aqbanking_cli) + [
         "request",
         "--balance",
@@ -112,20 +113,19 @@ def cmd_aq_balances(args: argparse.Namespace) -> int:
     parsed = parse_balance_output(output, args.date)
     diagnostics = list(parsed.diagnostics)
     records = []
-    for row in parsed:
+    for row in parsed.rows:
         try:
             records.append(balance_record_from_row(row))
         except LedgerValidationError as exc:
             diagnostics.extend(exc.diagnostics)
 
     ledger = JsonlLedger(ledger_path)
-    result = ledger.add(records)
-    exported = export_balances_csv(
-        csv_path,
-        (record for record in result.records if record.record_type == "balance"),
-    )
+    with ledger.locked() as session:
+        result = session.add(records)
+        exported = export_balances_csv(csv_path, session.records("balance"))
     print(
-        f"Ledger import: {result.added} added, {result.duplicates} duplicate(s); "
+        f"Ledger import: {result.added} added, {result.updated} updated, "
+        f"{result.duplicates} duplicate(s); "
         f"exported {exported} balance row(s) to {csv_path}."
     )
     for diagnostic in diagnostics:
@@ -158,10 +158,16 @@ def cmd_ledger_export(args: argparse.Namespace) -> int:
     csv_path = resolve_runtime_path(
         ctx, args.csv, ctx.data_dir / "balances.csv", args.allow_outside_runtime, "CSV export"
     )
-    records = JsonlLedger(ledger_path).records("balance")
-    exported = export_balances_csv(csv_path, records)
+    _reject_same_ledger_and_csv_path(ledger_path, csv_path)
+    with JsonlLedger(ledger_path).locked() as session:
+        exported = export_balances_csv(csv_path, session.records("balance"))
     print(f"Exported {exported} balance row(s) from {ledger_path} to {csv_path}.")
     return 0
+
+
+def _reject_same_ledger_and_csv_path(ledger_path: Path, csv_path: Path) -> None:
+    if ledger_path == csv_path:
+        raise ValueError("Ledger and CSV export paths must refer to different files.")
 
 
 def add_root(parser: argparse.ArgumentParser) -> None:
