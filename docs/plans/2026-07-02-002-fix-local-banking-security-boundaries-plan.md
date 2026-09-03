@@ -10,6 +10,12 @@ origin: "codex-security scan 51690b35b34f_20260702T103008Z"
 
 # fix: Harden Local Banking Security Boundaries
 
+## Implementation status (as of 2026-09-02)
+
+Delivered and merged in PR #9 (`main` at `bc87c32`).
+
+The per-unit `Files:` lists below are planning-time predictions. The security tests were consolidated into `tests/test_aqbanking_security.py` and `tests/test_security.py` rather than split across the four separate files this plan names; `tests/test_aqbanking_tools.py`, `tests/test_cli_paths.py`, `tests/test_csv_safety.py` and `tests/test_file_permissions.py` were never created.
+
 ## Goal Capsule
 
 **Objective:** Close the six actionable local security findings in the AqBanking/FinTS workflow without changing the product's local-first shape.

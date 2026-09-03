@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>U2 — Der lokale Ledger</title>
+<style>
+  :root{
+    --bg:#faf8f5; --ink:#1c1a17; --mute:#6b6156; --rule:#e0d9cf;
+    --accent:#8a4b2a; --accent-soft:#f2e6dd; --code-bg:#f4f1ec;
+    --warn:#8a2a2a; --warn-soft:#f7e7e5; --ok:#2f5d3f; --ok-soft:#e5efe7;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    font-size:17px; line-height:1.62; padding:3rem 1.5rem 5rem;
+  }
+  .wrap{max-width:1000px;margin:0 auto}
+  .txt{max-width:70ch}
+  h1{font-size:2.3rem;line-height:1.15;margin:0 0 1.2rem;letter-spacing:-.02em;font-weight:650}
+  h2{font-size:1.35rem;margin:3.2rem 0 .9rem;letter-spacing:-.01em;font-weight:640;
+     padding-top:1.1rem;border-top:1px solid var(--rule)}
+  h3{font-size:1.02rem;margin:1.9rem 0 .5rem;font-weight:660;letter-spacing:.005em}
+  p{margin:0 0 1rem}
+  .lede{font-size:1.12rem;color:#3b352e}
+  dl.meta{
+    display:grid;grid-template-columns:max-content 1fr;gap:.3rem 1.2rem;
+    margin:0 0 2.4rem;padding:1rem 1.2rem;background:#fff;border:1px solid var(--rule);
+    border-radius:8px;font-size:.9rem;max-width:70ch;
+  }
+  dl.meta dt{color:var(--mute);font-weight:600}
+  dl.meta dd{margin:0}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em;
+       background:var(--code-bg);padding:.1em .35em;border-radius:3px}
+  pre{background:var(--code-bg);border:1px solid var(--rule);border-radius:8px;
+      padding:1rem 1.1rem;overflow-x:auto;font-size:.83rem;line-height:1.6;margin:0}
+  pre code{background:none;padding:0;font-size:1em}
+  .k{color:#8a4b2a;font-weight:600}.s{color:#2f5d3f}.c{color:#8d8377;font-style:italic}.n{color:#3a4f7a}
+  figure{margin:1.6rem 0 2rem}
+  figcaption{font-size:.85rem;color:var(--mute);margin-top:.6rem;max-width:70ch}
+  .annot{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:0;
+         border:1px solid var(--rule);border-radius:8px;overflow:hidden;background:#fff}
+  .annot .row{display:contents}
+  .annot pre{border:0;border-radius:0;border-bottom:1px solid var(--rule);background:var(--code-bg)}
+  .annot .note{padding:.85rem 1rem;border-bottom:1px solid var(--rule);border-left:1px solid var(--rule);
+               font-size:.87rem;color:#3b352e;background:#fff}
+  .annot .note b{color:var(--accent)}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin:1.4rem 0}
+  .card{border:1px solid var(--rule);border-radius:8px;padding:1rem 1.15rem;background:#fff}
+  .card h4{margin:0 0 .5rem;font-size:.82rem;text-transform:uppercase;letter-spacing:.07em;color:var(--mute)}
+  .card.bad{background:var(--warn-soft);border-color:#e6cdc9}
+  .card.good{background:var(--ok-soft);border-color:#cfe0d4}
+  .card p:last-child{margin-bottom:0}
+  .verdict{border-left:3px solid var(--accent);background:var(--accent-soft);
+           padding:.9rem 1.1rem;border-radius:0 6px 6px 0;margin:1.2rem 0;max-width:70ch}
+  .verdict p:last-child{margin-bottom:0}
+  ol.flow{counter-reset:s;list-style:none;padding:0;margin:1.3rem 0;max-width:70ch}
+  ol.flow li{counter-increment:s;position:relative;padding-left:2.6rem;margin-bottom:.9rem}
+  ol.flow li::before{content:counter(s);position:absolute;left:0;top:.05em;width:1.75rem;height:1.75rem;
+    background:var(--accent);color:#fff;border-radius:50%;display:grid;place-items:center;
+    font-size:.8rem;font-weight:700}
+  ul.tight{max-width:70ch;padding-left:1.2rem}
+  ul.tight li{margin-bottom:.55rem}
+  table{border-collapse:collapse;width:100%;max-width:70ch;margin:1.2rem 0;font-size:.92rem}
+  th,td{text-align:left;padding:.55rem .7rem;border-bottom:1px solid var(--rule);vertical-align:top}
+  th{font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--mute);font-weight:600}
+  footer{margin-top:4rem;padding-top:1.2rem;border-top:1px solid var(--rule);
+         font-size:.82rem;color:var(--mute)}
+  @media(max-width:760px){.cols,.annot{grid-template-columns:1fr}.annot .note{border-left:0}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>U2 — Der lokale Ledger</h1>
+
+<dl class="meta">
+  <dt>Date</dt><dd>2026-09-01</dd>
+  <dt>Input shape</dt><dd>concept</dd>
+  <dt>Subject</dt><dd>U2 Local Ledger Core — <code>docs/plans/2026-07-02-001-feat-product-iterations-plan.md</code>, Issue #2</dd>
+</dl>
+
+<p class="lede txt">Du hast heute einen sicheren Weg, Kontostände aus deiner Bank zu holen, und einen CSV-Anhang, in dem sie landen. U2 ersetzt diesen Anhang durch etwas, das du <em>befragen</em> kannst statt es nur fortzuschreiben. Dieser Unterschied — Export gegen Speicher — ist der ganze Inhalt von U2, und er entscheidet, ob alles danach (Tagging, Reports, Dashboard) auf Sand steht.</p>
+
+<h2>Erst hinsehen: was sich verschiebt</h2>
+
+<figure>
+<svg viewBox="0 0 980 340" width="100%" role="img" aria-label="Vergleich: heutiger Datenpfad gegen Ledger-Datenpfad">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6b6156"/>
+    </marker>
+  </defs>
+  <text x="0" y="18" font-size="12" font-weight="700" fill="#6b6156" letter-spacing="1.2">HEUTE</text>
+  <g font-size="12.5" fill="#1c1a17">
+    <rect x="0" y="34" width="132" height="52" rx="7" fill="#fff" stroke="#e0d9cf"/>
+    <text x="66" y="57" text-anchor="middle">Bank (FinTS)</text><text x="66" y="73" text-anchor="middle" font-size="10.5" fill="#6b6156">AqBanking</text>
+    <line x1="132" y1="60" x2="176" y2="60" stroke="#6b6156" stroke-width="1.4" marker-end="url(#ar)"/>
+    <rect x="180" y="34" width="132" height="52" rx="7" fill="#fff" stroke="#e0d9cf"/>
+    <text x="246" y="57" text-anchor="middle">ctxfile</text><text x="246" y="73" text-anchor="middle" font-size="10.5" fill="#6b6156">flüchtig</text>
+    <line x1="312" y1="60" x2="356" y2="60" stroke="#6b6156" stroke-width="1.4" marker-end="url(#ar)"/>
+    <rect x="360" y="34" width="150" height="52" rx="7" fill="#fff" stroke="#e0d9cf"/>
+    <text x="435" y="57" text-anchor="middle">parse_balance_</text><text x="435" y="73" text-anchor="middle">output()</text>
+    <line x1="510" y1="60" x2="554" y2="60" stroke="#6b6156" stroke-width="1.4" marker-end="url(#ar)"/>
+    <rect x="558" y="34" width="150" height="52" rx="7" fill="#f7e7e5" stroke="#e6cdc9"/>
+    <text x="633" y="57" text-anchor="middle">balances.csv</text><text x="633" y="73" text-anchor="middle" font-size="10.5" fill="#8a2a2a">append-only</text>
+    <text x="726" y="55" font-size="11" fill="#8a2a2a">Speicher und Export</text>
+    <text x="726" y="71" font-size="11" fill="#8a2a2a">sind dasselbe Ding.</text>
+  </g>
+
+  <line x1="0" y1="118" x2="980" y2="118" stroke="#e0d9cf" stroke-dasharray="4 4"/>
+  <text x="0" y="150" font-size="12" font-weight="700" fill="#6b6156" letter-spacing="1.2">MIT U2</text>
+  <g font-size="12.5" fill="#1c1a17">
+    <rect x="0" y="166" width="132" height="44" rx="7" fill="#fff" stroke="#e0d9cf"/>
+    <text x="66" y="193" text-anchor="middle">Bank (FinTS)</text>
+    <rect x="0" y="218" width="132" height="44" rx="7" fill="#fff" stroke="#e0d9cf"/>
+    <text x="66" y="245" text-anchor="middle">Broker-CSV</text>
+    <rect x="0" y="270" width="132" height="44" rx="7" fill="#fff" stroke="#e0d9cf" stroke-dasharray="3 3"/>
+    <text x="66" y="297" text-anchor="middle" fill="#6b6156">Krypto (später)</text>
+    <line x1="132" y1="188" x2="196" y2="230" stroke="#6b6156" stroke-width="1.4" marker-end="url(#ar)"/>
+    <line x1="132" y1="240" x2="196" y2="240" stroke="#6b6156" stroke-width="1.4" marker-end="url(#ar)"/>
+    <line x1="132" y1="292" x2="196" y2="252" stroke="#6b6156" stroke-width="1.4" marker-end="url(#ar)"/>
+    <rect x="200" y="180" width="200" height="120" rx="9" fill="#e5efe7" stroke="#cfe0d4" stroke-width="1.5"/>
+    <text x="300" y="208" text-anchor="middle" font-weight="700">Ledger</text>
+    <text x="300" y="230" text-anchor="middle" font-size="11">accounts · balances</text>
+    <text x="300" y="248" text-anchor="middle" font-size="11">transactions · holdings</text>
+    <text x="300" y="272" text-anchor="middle" font-size="11" fill="#2f5d3f">+ provenance</text>
+    <text x="300" y="290" text-anchor="middle" font-size="11" fill="#2f5d3f">+ stabile IDs</text>
+    <line x1="400" y1="240" x2="452" y2="240" stroke="#6b6156" stroke-width="1.4" marker-end="url(#ar)"/>
+    <rect x="456" y="166" width="150" height="44" rx="7" fill="#fff" stroke="#e0d9cf"/>
+    <text x="531" y="193" text-anchor="middle">CSV-Export</text>
+    <rect x="456" y="218" width="150" height="44" rx="7" fill="#fff" stroke="#e0d9cf"/>
+    <text x="531" y="245" text-anchor="middle">JSON (Agent)</text>
+    <rect x="456" y="270" width="150" height="44" rx="7" fill="#fff" stroke="#e0d9cf" stroke-dasharray="3 3"/>
+    <text x="531" y="297" text-anchor="middle" fill="#6b6156">Report, Dashboard</text>
+    <text x="626" y="232" font-size="11" fill="#2f5d3f">Ein Speicher, viele Ausgaben.</text>
+    <text x="626" y="250" font-size="11" fill="#2f5d3f">Jede Ausgabe wegwerfbar.</text>
+  </g>
+</svg>
+<figcaption>Oben der heutige Pfad: die CSV ist gleichzeitig Ablage und Ausgabeformat. Unten U2: der Ledger wird zur Ablage, und jede CSV, jedes JSON, jeder Report ist eine wegwerfbare Projektion daraus. Der Unterschied ist nicht kosmetisch — er entscheidet, ob du Daten je korrigieren, neu einlesen oder befragen kannst.</figcaption>
+</figure>
+
+<h2>Was ein Ledger hier eigentlich meint</h2>
+
+<p class="txt">„Ledger" klingt nach Buchhaltung, meint hier aber etwas Schlichteres: <strong>eine lokale Sammlung normalisierter Datensätze, die weiß, woher jeder einzelne stammt.</strong> Drei Eigenschaften machen ihn zum Ledger statt zu einer Datei-Halde:</p>
+
+<ul class="tight">
+  <li><strong>Normalisiert</strong> — ein Kontostand aus FinTS und einer aus einem Broker-CSV sehen im Ledger gleich aus. Nur deshalb kann ein späterer Report über beide rechnen, ohne jede Quelle einzeln zu kennen.</li>
+  <li><strong>Adressierbar</strong> — jeder Datensatz hat eine ID, die beim nächsten Import wieder dieselbe ist. Ohne das gibt es kein „derselbe Datensatz nochmal".</li>
+  <li><strong>Rückverfolgbar</strong> — zu jedem Datensatz steht dabei, aus welchem Import, aus welcher Datei, zu welcher Zeit er kam.</li>
+</ul>
+
+<p class="txt">Der Plan nennt fünf Record-Typen: <code>accounts</code>, <code>balances</code>, <code>transactions</code>, <code>holdings</code> und die <code>provenance</code>, die an allen hängt. Vier davon sind Daten, der fünfte ist das Gedächtnis darüber, wie die Daten hereinkamen.</p>
+
+<h2>Warum die heutige CSV das nicht sein kann</h2>
+
+<p class="txt">Das ist kein theoretisches Argument. Hier ist der reale Pfad aus <code>src/personal_finance_agent/cli.py</code>, mit den Stellen, an denen sich Speicher und Export gegenseitig im Weg stehen:</p>
+
+<div class="annot">
+  <div class="row">
+    <pre><code><span class="k">def</span> <span class="n">cmd_aq_balances</span>(args) -&gt; <span class="k">int</span>:
+    ctx = context(args)
+    context_file = resolve_runtime_path(ctx, args.context, ...)
+    csv_path = resolve_runtime_path(ctx, args.csv,
+                   ctx.data_dir / <span class="s">"balances.csv"</span>, ...)</code></pre>
+    <div class="note"><b>Das Ziel ist eine Datei, kein Speicher.</b> Der Befehl kennt genau einen Ausgabeort und keinen Begriff davon, was dort schon liegt.</div>
+  </div>
+  <div class="row">
+    <pre><code>    template = <span class="s">"$(dateAsString)\t$(valueAsString)\t"</span> \
+               <span class="s">"$(iban)\t$(bankcode)\t$(accountnumber)"</span>
+    output = run_capture(ctx, ... [<span class="s">"listbal"</span>, ...])
+    rows = parse_balance_output(output, args.date)</code></pre>
+    <div class="note"><b>Fünf Felder, fest verdrahtet.</b> Die Form der Daten steckt in einem Template-String im Befehl. Eine zweite Quelle mit anderer Form hat hier keinen Ort.</div>
+  </div>
+  <div class="row">
+    <pre><code>    append_csv(csv_path, rows)
+    <span class="k">return</span> 0</code></pre>
+    <div class="note"><b>Anhängen, immer.</b> Zweimal am selben Tag ausgeführt heißt: zwei identische Zeilen. Nichts prüft, ob dieser Stand schon dasteht.</div>
+  </div>
+</div>
+
+<h3>Der Befund, der die Sache entscheidet</h3>
+
+<p class="txt">In <code>aqbanking.py</code> läuft jede Zelle vor dem Schreiben durch <code>spreadsheet_safe_cell</code>. Die Präfixliste ist <code>("=", "+", "-", "@", "\t", "\r")</code> — und weil <code>-</code> darin steht, passiert Folgendes mit einem negativen Kontostand:</p>
+
+<div class="cols">
+  <div class="card good">
+    <h4>Was geparst wird</h4>
+    <p><code>balance</code> = <code>-1234.56</code></p>
+    <p>Eine Zahl. Rechenbar, vergleichbar, korrekt.</p>
+  </div>
+  <div class="card bad">
+    <h4>Was in der CSV landet</h4>
+    <p><code>balance</code> = <code>'-1234.56</code></p>
+    <p>Ein String mit vorangestelltem Apostroph. Wer das zurückliest, bekommt keine Zahl mehr.</p>
+  </div>
+</div>
+
+<p class="txt">Diese Umwandlung ist <em>richtig</em>. Sie verhindert, dass eine Tabellenkalkulation die Zelle als Formel interpretiert — eine echte Sicherheitsmaßnahme, und sie soll bleiben. Der Punkt ist ein anderer: Sie gehört zum <strong>Export</strong>. Solange die CSV auch deine Ablage ist, verseucht eine Ausgabe-Entscheidung deine Daten. Jedes negative Guthaben, jeder Betrag mit führendem Minus liegt bei dir als String im „Speicher".</p>
+
+<div class="verdict">
+<p><strong>Das ist U2 in einem Satz:</strong> Der Ledger hält die Zahl als Zahl. <code>spreadsheet_safe_cell</code> wandert dorthin, wo sie hingehört — in den CSV-Export, als letzter Schritt vor dem Schreiben, ohne die gespeicherten Daten zu berühren.</p>
+</div>
+
+<h2>Die drei Begriffe aus Issue #2</h2>
+
+<h3>Provenance — woher kam das</h3>
+
+<p class="txt">Bemerkenswert: du unterscheidest im Code bereits <em>drei verschiedene Zeitbegriffe</em>, ohne dass sie irgendwo benannt sind.</p>
+
+<table>
+  <tr><th>Feld</th><th>Bedeutet</th><th>Kommt von</th></tr>
+  <tr><td><code>balance_date</code></td><td>Wann die Bank diesen Stand datiert</td><td>der Bank</td></tr>
+  <tr><td><code>date</code></td><td>Welchem Stichtag du ihn zuordnest</td><td><code>--date</code>, Default heute</td></tr>
+  <tr><td><code>exported_at</code></td><td>Wann du ihn abgeholt hast</td><td><code>datetime.now()</code> beim Parsen</td></tr>
+</table>
+
+<p class="txt">Provenance heißt: diese Unterscheidung wird explizit und bekommt Gesellschaft — welcher Import-Lauf, welche Quelldatei, welcher Connector, welche Version des Parsers. Der Nutzen ist nicht Ordnungsliebe. Er ist, dass du in sechs Monaten einen falschen Import <em>zurücknehmen</em> kannst, ohne den Rest anzufassen: „alles aus Import <code>imp_a3f9</code> raus" ist nur beantwortbar, wenn jeder Datensatz weiß, aus welchem Import er stammt.</p>
+
+<h3>Stabile IDs — was macht zwei Datensätze zu demselben</h3>
+
+<p class="txt">Eine stabile ID ist keine Zufallszahl. Sie wird aus dem Inhalt <em>berechnet</em>, sodass derselbe Datensatz aus derselben Quelle zweimal dieselbe ID ergibt. Für Kontostände ist das einfach: Konto + Datum + Quelle bestimmen den Stand eindeutig — pro Konto und Tag gibt es genau einen Saldo.</p>
+
+<p class="txt">Bei Transaktionen wird es unangenehm, und das ist die eigentliche Schwierigkeit von U2. Viele europäische Banken liefern über FinTS <strong>keine stabile Transaktions-ID</strong>. Du musst also eine aus dem Inhalt bilden — Konto, Buchungsdatum, Betrag, Verwendungszweck. Und dann läufst du in genau dieses Problem:</p>
+
+<div class="cols">
+  <div class="card bad">
+    <h4>Falsche Verschmelzung</h4>
+    <p>Du kaufst am Dienstag zweimal Kaffee für 4,50 € beim selben Händler. Zwei echte Buchungen, identisch in jedem Feld.</p>
+    <p>Ein reiner Inhalts-Hash hält sie für <em>dieselbe</em> Buchung und wirft eine weg. <strong>Dein Ledger zeigt 4,50 € statt 9 €.</strong></p>
+  </div>
+  <div class="card">
+    <h4>Falsches Duplikat</h4>
+    <p>Du importierst denselben Monat zweimal. Der Hash weicht minimal ab, weil die Bank den Verwendungszweck anders umgebrochen hat.</p>
+    <p>Der Ledger legt beide an. <strong>Deine Ausgaben verdoppeln sich.</strong></p>
+  </div>
+</div>
+
+<p class="txt">Beide Fehler sind schlimm, aber nicht gleich schlimm. Das falsche Duplikat ist <em>sichtbar</em> — es fällt beim Draufschauen auf und lässt sich nachträglich beheben. Die falsche Verschmelzung ist <em>unsichtbar</em>: die Buchung ist einfach weg, und nichts im System weiß, dass sie je da war. Deshalb die Faustregel für Finanzdaten: <strong>im Zweifel lieber ein Duplikat zu viel als eine Buchung zu wenig.</strong></p>
+
+<p class="txt">Der übliche Ausweg ist ein Ordinal-Zähler: Bei identischem Hash innerhalb desselben Kontos und Tages hängst du eine laufende Nummer an — Kaffee #1 und Kaffee #2. Beim zweiten Import desselben Auszugs entstehen dieselben zwei IDs, also greift die Deduplizierung trotzdem korrekt.</p>
+
+<h3>Dedupe — und die stille Zeile</h3>
+
+<p class="txt">Deduplizierung ist damit fast schon geschenkt: Wenn IDs stabil sind, ist ein Duplikat schlicht eine ID, die es schon gibt. Interessanter ist die Frage, was der Ledger tut, wenn ein Datensatz <em>gar nicht</em> hineinpasst. Heute macht der Parser das hier:</p>
+
+<pre style="max-width:70ch"><code><span class="k">for</span> line <span class="k">in</span> output.splitlines():
+    parts = line.split(<span class="s">"\t"</span>)
+    <span class="k">if</span> len(parts) != <span class="n">5</span>:
+        <span class="k">continue</span>   <span class="c"># still verworfen — kein Log, keine Zählung</span></code></pre>
+
+<p class="txt">Eine Zeile, die nicht exakt fünf Tab-Felder hat, verschwindet spurlos. Ich habe das nachgestellt: dreifeldrige Eingabe ergibt null Zeilen und keinerlei Hinweis. Bei drei Konten und einer Bank, die für eines davon ein Feld weglässt, exportierst du zwei Salden und merkst es nicht.</p>
+
+<p class="txt">Das ist der Grund, warum Issue #2 <em>„malformed records produce field-level diagnostics"</em> als Akzeptanzkriterium führt. Für Finanzdaten gilt: <strong>lieber laut scheitern als leise unvollständig sein.</strong> Ein Ledger, der weiß, dass er drei Zeilen nicht verstanden hat, ist ehrlicher als eine CSV, die so aussieht, als sei alles gut gegangen.</p>
+
+<h2>Die zwei Entscheidungen, die der Plan offen lässt</h2>
+
+<p class="txt">Der Plan schreibt „simple file-backed format first" und legt sich nicht fest. Zwei Fragen musst du beim Bauen beantworten:</p>
+
+<h3>1. Speicherformat</h3>
+
+<div class="cols">
+  <div class="card">
+    <h4>JSONL (eine Zeile pro Record)</h4>
+    <p>Lesbar im Editor, diff-bar, trivial zu schreiben, keine Abhängigkeit. Schema-Änderungen sind eine Migrationsschleife über Zeilen.</p>
+    <p>Abfragen heißt: alles laden und in Python filtern. Bei ein paar zehntausend Transaktionen völlig unkritisch.</p>
+  </div>
+  <div class="card">
+    <h4>SQLite</h4>
+    <p>In der Standardbibliothek, also auch keine Abhängigkeit. Echte Indizes, echte Constraints — ein <code>UNIQUE</code> auf der Record-ID <em>erzwingt</em> Dedupe, statt sie zu implementieren.</p>
+    <p>Dafür undurchsichtiger: du kannst deinen Ledger nicht mehr einfach <code>cat</code>en oder in Git ansehen.</p>
+  </div>
+</div>
+
+<div class="verdict">
+<p><strong>Mein Vorschlag: JSONL.</strong> Nicht weil es technisch überlegen wäre — SQLite ist es in fast jeder Hinsicht — sondern weil es zur Phase passt. Du baust einen Datenmodell-Entwurf, den du in den nächsten Iterationen mehrfach umwerfen wirst, und du hast noch keinen einzigen echten Nutzer außer dir. Ein Format, das du im Editor öffnen und von Hand reparieren kannst, ist in dieser Phase mehr wert als Indizes. Der Umstieg auf SQLite ist später eine Nachmittagsarbeit, <em>wenn</em> die Records stabil sind — und genau dann liegt der Nutzen auch höher.</p>
+</div>
+
+<h3>2. Woraus die Source-Identity gebildet wird</h3>
+
+<p class="txt">Konkret: welche Felder gehen in den Hash, und welche nicht. Der Verwendungszweck ist der Wackelkandidat — Banken formatieren ihn unterschiedlich, kürzen ihn, brechen ihn um. Nimmst du ihn rein, riskierst du falsche Duplikate bei Reformatierung. Lässt du ihn weg, steigt die Kollisionsrate und der Ordinal-Zähler muss mehr Arbeit leisten.</p>
+
+<p class="txt">Diese Entscheidung lässt sich nicht am Reißbrett treffen. Sie braucht echte Auszüge von deinen echten Banken. Der pragmatische Weg: Hash über Konto + Buchungsdatum + Betrag + normalisierter Verwendungszweck (Whitespace zusammengezogen, Groß-/Kleinschreibung vereinheitlicht), plus Ordinal. Den Rohtext behältst du daneben im Record, damit du die Regel später ändern und alles neu berechnen kannst — was wiederum nur geht, weil die Provenance den Ursprung festhält.</p>
+
+<h2>Woran du merkst, dass U2 fertig ist</h2>
+
+<ol class="flow">
+  <li><strong>Zweimal ausführen ändert nichts.</strong> <code>aq balances</code> zweimal hintereinander lässt den Ledger identisch — gleiche Anzahl Records, gleiche IDs. Das ist der Test, den die heutige CSV nicht besteht.</li>
+  <li><strong>Der Export liest aus dem Ledger.</strong> Die CSV entsteht aus gespeicherten Records, nicht aus einer frisch geparsten AqBanking-Ausgabe. Der Plan nennt das explizit: „CLI export reads from the ledger rather than re-parsing a connector output file."</li>
+  <li><strong>Kaputte Eingaben sind laut.</strong> Eine unverständliche Zeile erzeugt eine benannte Diagnose, keine stille Lücke.</li>
+  <li><strong>Der Ledger ist inspizierbar.</strong> Ein Befehl gibt dir maschinenlesbar zurück, was drinsteht — Konten, Stände, Herkunft. Damit steht nebenbei die erste Fläche, auf der U7 später aufsetzt.</li>
+</ol>
+
+<p class="txt">Was U2 <em>nicht</em> ist, ist genauso wichtig: keine Transaktionen aus der Bank (die kommen mit der Ingestion und brauchen <code>listtrans</code>), kein Tagging, keine Kategorien, kein Report. U2 baut den Ort, an dem all das später hingehört — und macht die Entscheidungen, die sich danach nur noch teuer korrigieren lassen.</p>
+
+<footer>Composed 2026-09-01 by ce-explain</footer>
+
+</div>
+</body>
+</html>

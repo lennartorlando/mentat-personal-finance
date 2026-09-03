@@ -9,6 +9,16 @@ date: 2026-07-02
 
 # Product Iterations - Plan
 
+## Implementation status (as of 2026-09-02)
+
+Recorded here because the unit sections below are written in planning voice and do not otherwise say what has shipped.
+
+- **U1** — delivered and merged in PR #9 (`main` at `bc87c32`). Issue #1 closed.
+- **U2** — implemented but **not merged**. Lives on local branch `u2-ledger-codex` (`460a455`, 76 tests green); a second independent implementation sits on `u2-ledger-grok`. Issue #2 remains open until one merges. The delivered shape differs from the U2 prediction below: it added `src/personal_finance_agent/private_files.py` and `tests/test_private_files.py`, and did not create `tests/fixtures/`.
+- **U3-U8** — not started.
+
+The per-unit `Files:` lists throughout this document are planning-time predictions, not records of what exists. Where a listed path was never created, it is marked inline below.
+
 ## Goal Capsule
 
 **Objective:** Package Mentat into a sequence of product iterations that first solves private personal use with European banks, then expands into dashboards, tagging, reporting, and agent-native interaction.
@@ -146,6 +156,8 @@ docs/
 **Dependencies:** None.
 
 **Files:** `src/personal_finance_agent/aqbanking.py`, `src/personal_finance_agent/cli.py`, `tests/test_security.py`, `tests/test_aqbanking.py`, `docs/usage/fints-setup.md`.
+
+> Delivered as `tests/test_aqbanking_security.py`, not `tests/test_aqbanking.py`. `docs/usage/fints-setup.md` was never written — the FinTS setup steps live in `README.md` instead.
 
 **Approach:** Keep the generic AqBanking commands public and move bank-specific presets into documentation/examples that do not identify the user's personal setup. Add clearer setup diagnostics, safer PIN prompting, JSON-capable account listing, and repeatable balance export behavior.
 
@@ -367,6 +379,8 @@ Deliver U7 and U8. This makes the same system usable by humans, agents, and visu
 ---
 
 ## Documentation Plan
+
+None of the files below exist yet; `docs/usage/` has not been created. The FinTS setup steps currently live in `README.md`.
 
 - `docs/usage/fints-setup.md` for German/Austrian FinTS setup.
 - `docs/usage/csv-imports.md` for broker/app-bank import fallbacks.
