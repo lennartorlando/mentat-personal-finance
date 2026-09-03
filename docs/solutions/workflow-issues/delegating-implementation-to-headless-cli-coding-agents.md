@@ -79,15 +79,15 @@ grok -p "<prompt>" ... --cwd /tmp/review-copy --permission-mode bypassPermission
 
 Containment becomes a property of the directory, not of the permission flags.
 
-### A sandboxed agent inside a worktree needs the parent repo's `.git` in its writable set
+### The Codex sandbox excludes every `.git` from writes; name it explicitly
 
-A `git worktree` has no `.git` directory of its own. Its metadata — including the index it must lock to commit — lives in the parent repository under `.git/worktrees/<name>/`, outside a `workspace-write` sandbox rooted at the worktree. The failure lands at the commit step, after all the real work is done:
+Codex's `workspace-write` sandbox carves `.git/` out of every writable root — the primary workspace and any `--add-dir` alike. Verified with `codex sandbox`: a file in the repo root is writable, a file in that repo's `.git/` is `Operation not permitted`, and it becomes writable only when `.git` is itself named as a writable root. Any git command that writes the index or refs fails at the commit step, after all the real work is done:
 
 ```text
-fatal: Unable to create '<repo>/.git/worktrees/<name>/index.lock': Operation not permitted
+fatal: Unable to create '<repo>/.git/index.lock': Operation not permitted
 ```
 
-Add the parent `.git` explicitly:
+This is not specific to worktrees, although a worktree makes it more confusing: its `.git` is a file pointing at `<parent>/.git/worktrees/<name>/`, so the path in the error lives in the parent repo. The cause is the same carve-out either way. Adding the repo directory alone does not help — one run was lost to exactly that. Name the `.git` for every repo the agent must commit in; for a worktree, that is the parent's:
 
 ```bash
 codex exec -m gpt-5.6-sol -c model_reasoning_effort="medium" \
