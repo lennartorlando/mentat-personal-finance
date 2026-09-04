@@ -47,7 +47,7 @@ The mechanics of the delegation, not the ledger design, cost the most time. Thre
 - A sandboxed `codex exec` implemented its task correctly and then could not commit it.
 - Backgrounded agents piped through `tail` produced an empty log for their entire runtime, so a working run was indistinguishable from a stalled one.
 
-The work described here lives on two unmerged local branches, `u2-ledger-codex` and `u2-ledger-grok`, neither merged to `main`. `main` is at the merge of PR #9.
+The work described here was merged in PR #10. A second independent implementation of the same brief existed on a parallel branch and was discarded after review — its value was the divergent findings, not its code.
 
 ## Guidance
 
@@ -180,4 +180,4 @@ After the fixing agent claimed all fourteen closed, independent verification pas
 
 - `docs/plans/2026-07-02-001-feat-product-iterations-plan.md` — the plan whose U2 unit was the payload. Its U2 section still presents completed work as pending, and its U1 file list names two paths that do not exist.
 - `docs/explainers/2026-09-01-u2-local-ledger-core.html` — untracked companion explaining what was built, where this doc explains how the agents were driven.
-- GitHub issue #2 "Iteration 1: Introduce the local ledger core" — still open; the implementation lives on an unmerged branch.
+- GitHub issue #2 "Iteration 1: Introduce the local ledger core" — closed by the merge of PR #10.

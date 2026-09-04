@@ -14,7 +14,7 @@ date: 2026-07-02
 Recorded here because the unit sections below are written in planning voice and do not otherwise say what has shipped.
 
 - **U1** — delivered and merged in PR #9 (`main` at `bc87c32`). Issue #1 closed.
-- **U2** — implemented but **not merged**. Lives on local branch `u2-ledger-codex` (`460a455`, 76 tests green); a second independent implementation sits on `u2-ledger-grok`. Issue #2 remains open until one merges. The delivered shape differs from the U2 prediction below: it added `src/personal_finance_agent/private_files.py` and `tests/test_private_files.py`, and did not create `tests/fixtures/`.
+- **U2** — delivered and merged in PR #10 (`main` at `f1e1161`, 76 tests green). Issue #2 closed. A second independent implementation existed on `u2-ledger-grok` and was discarded after review. The delivered shape differs from the U2 prediction below: it added `src/personal_finance_agent/private_files.py` and `tests/test_private_files.py`, and did not create `tests/fixtures/`.
 - **U3-U8** — not started.
 
 The per-unit `Files:` lists throughout this document are planning-time predictions, not records of what exists. Where a listed path was never created, it is marked inline below.
