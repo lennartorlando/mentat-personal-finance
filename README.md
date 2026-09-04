@@ -10,7 +10,7 @@ The Python package and CLI module currently retain the `personal_finance_agent` 
 
 ## Status
 
-Pre-alpha. The first working backend is an AqBanking/FinTS wrapper for local account and balance exports.
+Pre-alpha. The working backends are an AqBanking/FinTS wrapper for local account and balance exports and a profile-driven CSV transaction importer.
 
 ## Principles
 
@@ -48,12 +48,17 @@ PYTHONPATH=src python3 -m personal_finance_agent.cli validate-pin
 PYTHONPATH=src python3 -m unittest discover -s tests
 ```
 
+For brokers, app banks, and exchanges without FinTS access, see
+[Importing CSV transactions](docs/usage/csv-imports.md). The guide includes a
+complete local profile, all supported amount layouts, preview-first commands,
+and the overlapping re-import semantics.
+
 ## Backends
 
 Planned connector families:
 
 - AqBanking / FinTS for Germany and parts of the DACH ecosystem.
-- CSV/PDF/manual imports for brokers and banks without useful APIs.
+- CSV imports for brokers and banks without useful APIs; PDF and manual imports remain planned.
 - Coinbase and other exchange APIs where read-only keys are available.
 - Optional Open Banking providers where they make sense for individuals.
 
