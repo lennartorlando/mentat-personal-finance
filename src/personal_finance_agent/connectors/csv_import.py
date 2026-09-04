@@ -14,7 +14,6 @@ from .csv_profile import CsvProfile
 
 
 CSV_INPUT_NAME = "csv-import"
-ANSI_ESCAPE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 NUMBER = re.compile(r"^[+-]?[0-9]+(?:\.[0-9]+)?$")
 DENOMINATION = re.compile(r"^[A-Z0-9]+$")
 
@@ -115,8 +114,7 @@ def _find_header(
     diagnostics: List[Diagnostic],
 ) -> Tuple[Optional[List[str]], Optional[Dict[str, int]]]:
     candidate_descriptions = []  # type: List[str]
-    declared = profile.declared_columns()
-    required_names = set(name for _, name in declared)
+    required_names = set(name for _, name in profile.declared_columns())
     try:
         for cells in reader:
             if _contains_nul(cells):
@@ -126,36 +124,13 @@ def _find_header(
                 continue
             cells = list(cells)
             cells[0] = cells[0].lstrip("\ufeff")
+            if "ledger_export_id" in cells:
+                raise ValueError("Refusing CSV input: Mentat-exported files cannot be imported.")
             names = set(cells)
-            matched = required_names.intersection(names)
             if required_names.issubset(names):
                 return cells, {name: cells.index(name) for name in required_names}
             if len(candidate_descriptions) < 20:
                 candidate_descriptions.append(_candidate_description(cells))
-            if len(matched) >= max(1, len(required_names) - 1):
-                for profile_key, name in declared:
-                    if name not in names:
-                        diagnostics.append(
-                            Diagnostic(
-                                CSV_INPUT_NAME,
-                                "header",
-                                "{} names missing column {!r}".format(profile_key, _safe_header_name(name)),
-                                reader.line_num,
-                            )
-                        )
-                unexpected = [name for name in cells if name not in required_names]
-                for name in unexpected[:5]:
-                    diagnostics.append(
-                        Diagnostic(
-                            CSV_INPUT_NAME,
-                            "header",
-                            "confirmed header contains undeclared column {!r}".format(
-                                _safe_header_name(name)
-                            ),
-                            reader.line_num,
-                        )
-                    )
-                return None, None
     except _DecodeAtLine:
         raise
     except csv.Error as exc:
@@ -334,9 +309,3 @@ def _candidate_description(cells: List[str]) -> str:
             else:
                 classes.add("punctuation")
     return "{} column(s) containing {}".format(len(cells), ", ".join(sorted(classes)) or "empty cells")
-
-
-def _safe_header_name(value: str) -> str:
-    cleaned = ANSI_ESCAPE.sub("", value)
-    cleaned = "".join(char for char in cleaned if ord(char) >= 32 and ord(char) != 127)
-    return cleaned[:80]

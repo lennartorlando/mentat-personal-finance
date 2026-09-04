@@ -210,6 +210,7 @@ def cmd_ledger_import_csv(args: argparse.Namespace) -> int:
     protected_paths = (
         ledger_path,
         ledger_path.with_name(f".{ledger_path.name}.lock"),
+        ledger_path.with_name(f".{ledger_path.name}.lineage"),
         ctx.data_dir / "balances.csv",
     )
     _reject_unsafe_import_file(input_path, protected_paths, "CSV input")

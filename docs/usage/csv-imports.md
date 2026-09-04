@@ -67,7 +67,10 @@ header includes `Buchungstag;Text;Notiz;Betrag;Waehrung`:
 
 The header is located by these declared names, so metadata and blank lines may
 appear before it and column order may change. A UTF-8 BOM on the first header
-cell is accepted. Header names otherwise must match exactly.
+cell is accepted. A row is confirmed as the header only when it contains every
+declared name; near matches are treated as preamble candidates and scanning
+continues. Header names otherwise must match exactly, and undeclared extra
+columns on a confirmed header are accepted.
 
 ## Profile fields
 
@@ -185,8 +188,10 @@ PYTHONPATH=src python3 -m personal_finance_agent.cli ledger import-csv \
 ```
 
 That flag applies to the ledger path; it is not needed for the input or profile.
-Mentat refuses non-regular inputs, its own ledger and lock paths, its balance
-export path, and CSV files produced by Mentat itself.
+Mentat refuses non-regular inputs, its own ledger, lock, and lineage paths, its
+balance export path, and CSV files produced by Mentat itself. Mentat-exported
+files are recognized by the `ledger_export_id` header column even when metadata
+or blank lines appear before that header.
 
 ## Periods and re-imports
 

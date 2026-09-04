@@ -252,7 +252,7 @@ class CsvFormatTests(unittest.TestCase):
             self.assertEqual(result.diagnostics[0].line, 2)
             self.assertNotIn("77,44", str(result.diagnostics))
 
-    def test_AE6_wrong_profile_names_key_and_missing_column_before_data_row(self):
+    def test_unconfirmed_header_followed_by_decode_failure_reports_encoding_without_value(self):
         with tempfile.TemporaryDirectory() as tmp:
             profile = write_profile(tmp, profile_value())
             path = Path(tmp) / "wrong-profile.csv"
@@ -265,8 +265,8 @@ class CsvFormatTests(unittest.TestCase):
 
             self.assertEqual(result.rows, ())
             diagnostic_text = str(result.diagnostics)
-            self.assertIn("columns.purpose[1]", diagnostic_text)
-            self.assertIn("Notiz", diagnostic_text)
+            self.assertEqual((result.diagnostics[0].field, result.diagnostics[0].line), ("encoding", 2))
+            self.assertNotIn("Notiz", diagnostic_text)
             self.assertNotIn("invalid data", diagnostic_text)
 
     def test_no_header_diagnostic_describes_candidates_without_values(self):
@@ -283,7 +283,7 @@ class CsvFormatTests(unittest.TestCase):
             self.assertNotIn("Secret", message)
             self.assertNotIn("DE00SECRET", message)
 
-    def test_header_diagnostic_strips_ansi_and_control_sequences(self):
+    def test_unconfirmed_header_diagnostic_never_echoes_ansi_or_cell_value(self):
         with tempfile.TemporaryDirectory() as tmp:
             profile = write_profile(tmp, profile_value())
             path = Path(tmp) / "header.csv"
@@ -296,16 +296,38 @@ class CsvFormatTests(unittest.TestCase):
             result = parse_csv(path, profile)
 
             diagnostic_text = str(result.diagnostics)
-            self.assertIn("ExtraHeader", diagnostic_text)
             self.assertNotIn("\x1b", diagnostic_text)
-            self.assertNotIn("x" * 81, diagnostic_text)
+            self.assertNotIn("ExtraHeader", diagnostic_text)
 
     def test_partial_header_match_never_echoes_unconfirmed_csv_cells(self):
         with tempfile.TemporaryDirectory() as tmp:
             profile = write_profile(tmp, profile_value())
             path = Path(tmp) / "preamble.csv"
+            for preamble in (
+                "Datum;Text;SENSITIVE_HOLDER;SENSITIVE_ACCOUNT",
+                "Datum;Text;Notiz;Betrag;SENSITIVE_ACCOUNT",
+            ):
+                with self.subTest(preamble=preamble):
+                    path.write_text(
+                        preamble + "\n"
+                        "Datum;Text;Notiz;Betrag;Waehrung\n"
+                        "12.01.2026;Synthetic;Note;1,00;EUR\n",
+                        encoding="utf-8",
+                    )
+
+                    result = parse_csv(path, profile)
+
+                    self.assertEqual(result.diagnostics, ())
+                    self.assertEqual(len(result.rows), 1)
+                    self.assertNotIn("SENSITIVE_HOLDER", str(result))
+                    self.assertNotIn("SENSITIVE_ACCOUNT", str(result))
+
+    def test_four_of_five_preamble_does_not_hide_real_header_or_echo_value(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = write_profile(tmp, profile_value())
+            path = Path(tmp) / "near.csv"
             path.write_text(
-                "Datum;Text;SENSITIVE_HOLDER;SENSITIVE_ACCOUNT\n"
+                "Datum;Text;Notiz;Betrag;DE00SYNTHETICIBAN00000\n"
                 "Datum;Text;Notiz;Betrag;Waehrung\n"
                 "12.01.2026;Synthetic;Note;1,00;EUR\n",
                 encoding="utf-8",
@@ -315,8 +337,7 @@ class CsvFormatTests(unittest.TestCase):
 
             self.assertEqual(result.diagnostics, ())
             self.assertEqual(len(result.rows), 1)
-            self.assertNotIn("SENSITIVE_HOLDER", str(result))
-            self.assertNotIn("SENSITIVE_ACCOUNT", str(result))
+            self.assertNotIn("DE00SYNTHETICIBAN00000", str(result))
 
     def test_unparseable_date_reports_position_and_format_without_cell(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -459,6 +480,9 @@ class CsvImportCommandTests(unittest.TestCase):
             self.assertEqual(code, 0, errors)
             self.assertIn("1 added", output)
             self.assertIn("1 retired", output)
+            transactions = JsonlLedger(root / "data" / "ledger.jsonl").records("transaction")
+            self.assertEqual([record.purpose for record in transactions], ["Corrected purpose | Note"])
+            self.assertNotIn("Old purpose | Note", [record.purpose for record in transactions])
 
     def test_AE5_malformed_row_reports_all_errors_without_values_and_writes_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -545,7 +569,41 @@ class CsvImportCommandTests(unittest.TestCase):
             self.assertIn("1 added", output)
             self.assertIn("2 retired", output)
             self.assertEqual([record.booking_date for record in transactions], ["2026-01-12", "2026-04-12"])
+            self.assertEqual(transactions[1].purpose, "Replacement | April")
             self.assertEqual({record.provenance.source_ref for record in transactions}, {"synthetic-broker-primary"})
+
+    def test_period_endpoints_are_inclusive_when_reimporting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            profile = write_profile_json(root, profile_value())
+            source = write_csv(
+                root,
+                [
+                    "31.12.2025;Before;Period;1,00;EUR",
+                    "01.01.2026;Start;Endpoint;2,00;EUR",
+                    "31.01.2026;End;Endpoint;3,00;EUR",
+                    "01.02.2026;After;Period;4,00;EUR",
+                ],
+            )
+            arguments = ("ledger", "import-csv", "--root", root, "--input", source, "--profile", profile)
+            self.assertEqual(run_cli(*arguments, "--period", "2025-12-31", "2026-02-01")[0], 0)
+            source = write_csv(root, ["15.01.2026;Replacement;Mid-period;5,00;EUR"])
+
+            code, output, errors = run_cli(
+                *arguments, "--period", "2026-01-01", "2026-01-31"
+            )
+
+            transactions = JsonlLedger(root / "data" / "ledger.jsonl").records("transaction")
+            self.assertEqual(code, 0, errors)
+            self.assertIn("2 retired", output)
+            self.assertEqual(
+                {(record.booking_date, record.purpose) for record in transactions},
+                {
+                    ("2025-12-31", "Before | Period"),
+                    ("2026-01-15", "Replacement | Mid-period"),
+                    ("2026-02-01", "After | Period"),
+                },
+            )
 
     def test_KTD5_regression_partial_parse_cannot_delete_existing_history(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -628,6 +686,48 @@ class CsvImportCommandTests(unittest.TestCase):
                     self.assertEqual(code, 2)
                     self.assertIn("Refusing", errors)
             self.assertEqual(ledger.read_text(encoding="utf-8"), "secret ledger")
+
+    def test_export_marker_after_preamble_is_refused_before_writing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            profile = write_profile_json(root, profile_value())
+            exported = root / "export.csv"
+            exported.write_text(
+                "preamble metadata\n"
+                "Datum;Text;Notiz;Betrag;Waehrung;ledger_export_id\n"
+                "12.01.2026;Synthetic;Note;1,00;EUR;mentat-ledger-export-v1:synthetic\n",
+                encoding="utf-8",
+            )
+
+            code, _, errors = run_cli(
+                "ledger", "import-csv", "--root", root, "--input", exported, "--profile", profile
+            )
+
+            self.assertEqual(code, 2)
+            self.assertIn("Refusing CSV input: Mentat-exported files cannot be imported.", errors)
+            self.assertFalse((root / "data" / "ledger.jsonl").exists())
+
+    def test_lineage_path_is_reserved_for_input_and_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data = root / "data"
+            data.mkdir()
+            lineage = data / ".ledger.jsonl.lineage"
+            lineage.write_text("protected lineage", encoding="utf-8")
+            profile = write_profile_json(root, profile_value())
+            source = write_csv(root, ["12.01.2026;First;Note;1,00;EUR"])
+
+            input_code, _, input_errors = run_cli(
+                "ledger", "import-csv", "--root", root, "--input", lineage, "--profile", profile
+            )
+            profile_code, _, profile_errors = run_cli(
+                "ledger", "import-csv", "--root", root, "--input", source, "--profile", lineage
+            )
+
+            self.assertEqual((input_code, profile_code), (2, 2))
+            self.assertIn("reserved for Mentat runtime data", input_errors)
+            self.assertIn("reserved for Mentat runtime data", profile_errors)
+            self.assertEqual(lineage.read_text(encoding="utf-8"), "protected lineage")
 
     @unittest.skipUnless(hasattr(os, "link"), "hard links are unavailable")
     def test_hardlinked_input_and_profile_cannot_alias_protected_runtime_files(self):
@@ -746,6 +846,31 @@ class CsvImportCommandTests(unittest.TestCase):
 
             self.assertEqual(code, 0, errors)
             self.assertEqual(json.loads(output)["rows"], [])
+
+    def test_empty_export_with_declared_period_retires_period_and_preserves_account(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            profile = write_profile_json(root, profile_value())
+            source = write_csv(
+                root,
+                [
+                    "12.01.2026;First;Note;1,00;EUR",
+                    "13.01.2026;Second;Note;2,00;EUR",
+                ],
+            )
+            arguments = ("ledger", "import-csv", "--root", root, "--input", source, "--profile", profile)
+            self.assertEqual(run_cli(*arguments)[0], 0)
+            source = write_csv(root, [])
+
+            code, output, errors = run_cli(
+                *arguments, "--period", "2026-01-01", "2026-01-31"
+            )
+
+            records = JsonlLedger(root / "data" / "ledger.jsonl").records()
+            self.assertEqual(code, 0, errors)
+            self.assertIn("0 added", output)
+            self.assertIn("2 retired", output)
+            self.assertEqual([record.record_type for record in records], ["account"])
 
     def test_renamed_profile_keeps_declared_source_ref_and_same_slice(self):
         with tempfile.TemporaryDirectory() as tmp:
